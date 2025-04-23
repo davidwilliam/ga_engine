@@ -1,5 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use ga_engine::{classical, ga};
+use ga_engine::transform::{Vec3, apply_matrix3, Rotor3};
 
 const BATCH_SIZE: usize = 1_000;
 
@@ -36,5 +37,33 @@ fn bench_geometric_product_full(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_matrix_mult, bench_geometric_product_full);
+/// Benchmark rotating a 3D point about Z axis: classical vs GA.
+fn bench_rotate_point(c: &mut Criterion) {
+    let batch = BATCH_SIZE;
+    let v = Vec3::new(1.0, 0.0, 0.0);
+    let m: [f64; 9] = [0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+    let rotor = Rotor3::from_axis_angle(&Vec3::new(0.0, 0.0, 1.0), std::f64::consts::FRAC_PI_2);
+
+    c.bench_function("rotate 3D point classical", |bencher| {
+        bencher.iter(|| {
+            let mut res = v;
+            for _ in 0..batch {
+                res = apply_matrix3(black_box(&m), black_box(&res));
+            }
+            black_box(res)
+        })
+    });
+
+    c.bench_function("rotate 3D point GA", |bencher| {
+        bencher.iter(|| {
+            let mut res = v;
+            for _ in 0..batch {
+                res = rotor.rotate(black_box(&res));
+            }
+            black_box(res)
+        })
+    });
+}
+
+criterion_group!(benches, bench_matrix_mult, bench_geometric_product_full, bench_rotate_point);
 criterion_main!(benches);
