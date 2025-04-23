@@ -180,4 +180,22 @@ impl Rotor3 {
             Vec3::new(arrx[3], arry[3], arrz[3]),
         ]
     }
+
+    /// SIMD rotate 8 Vec3s in parallel by doing two 4-lane SIMD passes
+    #[inline(always)]
+    pub fn rotate_simd8(&self, vs: &[Vec3; 8]) -> [Vec3; 8] {
+        // First 4 lanes
+        let chunk0 = [vs[0], vs[1], vs[2], vs[3]];
+        let r0 = self.rotate_simd(&chunk0);
+
+        // Next 4 lanes
+        let chunk1 = [vs[4], vs[5], vs[6], vs[7]];
+        let r1 = self.rotate_simd(&chunk1);
+
+        // Stitch results back together
+        [
+            r0[0], r0[1], r0[2], r0[3],
+            r1[0], r1[1], r1[2], r1[3],
+        ]
+    }
 }

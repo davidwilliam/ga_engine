@@ -90,6 +90,16 @@ fn bench_rotate_point(c: &mut Criterion) {
             black_box(vs)
         })
     });
+
+    c.bench_function("rotate 3D point GA (SIMD 8×)", |bencher| {
+        bencher.iter(|| {
+            let mut vs = [v0, v0, v0, v0, v0, v0, v0, v0];
+            for _ in 0..BATCH_SIZE {
+                vs = rotor.rotate_simd8(black_box(&vs));
+            }
+            black_box(vs)
+        })
+    });
 }
 
 criterion_group!(
