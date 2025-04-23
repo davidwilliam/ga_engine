@@ -18,3 +18,17 @@ We now have a rock-solid GA kernel. To turn that into a true GA Engine and demon
   5.1 Flesh out the README with these new examples, include code snippets and charts.
   5.2 Provide a tutorial Notebook or small app that highlights “drop in your classical code, switch one import, see a 2× performance win.”
 
+## Next
+
+- Micro-optimize rotate_fast
+  - Inline its arithmetic, unroll the cross-product, add #[inline(always)]—you’ll likely bring it below classical speed.
+  - Package the API
+- Export Vec3, apply_matrix3, Rotor3::{rotate, rotate_fast}, multiply_matrices, geometric_product_full in your crate’s public API.
+  - Add comprehensive docs/examples so users can copy-paste.
+- Killer-app demos
+  - Neural layer: show GA replacing a tiny dense layer (8→8) in an ML pipeline, matching inference results with lower latency.
+  - FHE primitive: implement a GA-based ciphertext rotation and bench it against the classical matrix method.
+- Publish & visualize
+  - Update your README with a bar chart (e.g. via Criterion’s CSV + Python/Matplotlib) showing these five benchmarks side-by-side.
+  - Release to crates.io—now any Rust dev can cargo add ga_engine and immediately see the performance story.
+

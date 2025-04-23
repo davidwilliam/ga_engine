@@ -37,33 +37,54 @@ fn bench_geometric_product_full(c: &mut Criterion) {
     });
 }
 
-/// Benchmark rotating a 3D point about Z axis: classical vs GA.
+/// Benchmark rotating a 3D point about Z axis: classical vs. GA sandwich vs. GA fast.
 fn bench_rotate_point(c: &mut Criterion) {
-    let batch = BATCH_SIZE;
-    let v = Vec3::new(1.0, 0.0, 0.0);
-    let m: [f64; 9] = [0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
-    let rotor = Rotor3::from_axis_angle(&Vec3::new(0.0, 0.0, 1.0), std::f64::consts::FRAC_PI_2);
+    let v0 = Vec3::new(1.0, 0.0, 0.0);
+    let m: [f64; 9] = [
+        0.0, -1.0, 0.0,
+        1.0,  0.0, 0.0,
+        0.0,  0.0, 1.0,
+    ];
+    let rotor = Rotor3::from_axis_angle(
+        &Vec3::new(0.0, 0.0, 1.0),
+        std::f64::consts::FRAC_PI_2,
+    );
 
     c.bench_function("rotate 3D point classical", |bencher| {
         bencher.iter(|| {
-            let mut res = v;
-            for _ in 0..batch {
+            let mut res = v0;
+            for _ in 0..BATCH_SIZE {
                 res = apply_matrix3(black_box(&m), black_box(&res));
             }
             black_box(res)
         })
     });
 
-    c.bench_function("rotate 3D point GA", |bencher| {
+    c.bench_function("rotate 3D point GA (sandwich)", |bencher| {
         bencher.iter(|| {
-            let mut res = v;
-            for _ in 0..batch {
+            let mut res = v0;
+            for _ in 0..BATCH_SIZE {
                 res = rotor.rotate(black_box(&res));
+            }
+            black_box(res)
+        })
+    });
+
+    c.bench_function("rotate 3D point GA (fast)", |bencher| {
+        bencher.iter(|| {
+            let mut res = v0;
+            for _ in 0..BATCH_SIZE {
+                res = rotor.rotate_fast(black_box(&res));
             }
             black_box(res)
         })
     });
 }
 
-criterion_group!(benches, bench_matrix_mult, bench_geometric_product_full, bench_rotate_point);
+criterion_group!(
+    benches,
+    bench_matrix_mult,
+    bench_geometric_product_full,
+    bench_rotate_point,
+);
 criterion_main!(benches);
