@@ -123,13 +123,35 @@ impl Rotor3 {
         Vec3::new(res_mv[1], res_mv[2], res_mv[3])
     }
 
-    /// Fast rotate using quaternion-style formula (~20 flops).
+    /// Fast rotate using quaternion-style formula (~20 flops), fully inlined and unrolled.
+    #[inline(always)]
     pub fn rotate_fast(&self, v: &Vec3) -> Vec3 {
+        let ax = self.axis.x;
+        let ay = self.axis.y;
+        let az = self.axis.z;
+        let vx = v.x;
+        let vy = v.y;
+        let vz = v.z;
+
         // t = axis × v
-        let t = self.axis.cross(v);
-        // u × t
-        let uxt = self.axis.cross(&t);
-        // v + 2*w*s * t + 2*s*s * (u×t)
-        *v + t.mul_scalar(2.0 * self.w * self.s) + uxt.mul_scalar(2.0 * self.s * self.s)
+        let tx = ay * vz - az * vy;
+        let ty = az * vx - ax * vz;
+        let tz = ax * vy - ay * vx;
+
+        // uxt = axis × t
+        let ux = ay * tz - az * ty;
+        let uy = az * tx - ax * tz;
+        let uz = ax * ty - ay * tx;
+
+        // coefficients
+        let k1 = 2.0 * self.w * self.s;
+        let k2 = 2.0 * self.s * self.s;
+
+        // result = v + k1 * t + k2 * uxt
+        Vec3::new(
+            vx + k1 * tx + k2 * ux,
+            vy + k1 * ty + k2 * uy,
+            vz + k1 * tz + k2 * uz,
+        )
     }
 }
