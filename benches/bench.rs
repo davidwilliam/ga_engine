@@ -1,10 +1,11 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use ga_engine::{classical, ga};
+use ga_engine::{classical};
+use ga_engine::ga::geometric_product_full;
 use ga_engine::transform::{Vec3, apply_matrix3, Rotor3};
 
 const BATCH_SIZE: usize = 1_000;
 
-/// Benchmark 8×8 matrix multiplication batched.
+/// Benchmark n×n matrix multiplication.
 fn bench_matrix_mult(c: &mut Criterion) {
     let n = black_box(8);
     let a: Vec<f64> = (0..n * n).map(|i| (i % 10) as f64).collect();
@@ -21,7 +22,7 @@ fn bench_matrix_mult(c: &mut Criterion) {
     });
 }
 
-/// Benchmark full 8-component multivector geometric product batched.
+/// Benchmark full 8-component multivector geometric product.
 fn bench_geometric_product_full(c: &mut Criterion) {
     let a: [f64; 8] = black_box([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
     let b = a;
@@ -30,14 +31,14 @@ fn bench_geometric_product_full(c: &mut Criterion) {
         bencher.iter(|| {
             let mut out = [0.0; 8];
             for _ in 0..BATCH_SIZE {
-                ga::geometric_product_full(black_box(&a), black_box(&b), &mut out);
+                geometric_product_full(black_box(&a), black_box(&b), &mut out);
             }
             black_box(out)
         })
     });
 }
 
-/// Benchmark rotating a 3D point about Z axis: classical vs. GA sandwich vs. GA fast.
+/// Benchmark rotating a 3D point about Z axis: classical, GA sandwich, GA fast, GA SIMD.
 fn bench_rotate_point(c: &mut Criterion) {
     let v0 = Vec3::new(1.0, 0.0, 0.0);
     let m: [f64; 9] = [
@@ -77,6 +78,16 @@ fn bench_rotate_point(c: &mut Criterion) {
                 res = rotor.rotate_fast(black_box(&res));
             }
             black_box(res)
+        })
+    });
+
+    c.bench_function("rotate 3D point GA (SIMD 4x)", |bencher| {
+        bencher.iter(|| {
+            let mut vs = [v0, v0, v0, v0];
+            for _ in 0..BATCH_SIZE {
+                vs = rotor.rotate_simd(black_box(&vs));
+            }
+            black_box(vs)
         })
     });
 }

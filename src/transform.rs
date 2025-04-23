@@ -1,7 +1,11 @@
 //! Semantic adapters and canonical use-cases: 3D point rotation via classical matrix vs. GA rotor
 
+use crate::ga::geometric_product_full;
+use wide::f64x4;
+
 /// 3D vector type
 #[derive(Copy, Clone, Debug, PartialEq)]
+/// A simple 3D point or vector
 pub struct Vec3 {
     pub x: f64,
     pub y: f64,
@@ -22,12 +26,12 @@ impl Vec3 {
     /// Return a normalized copy of this vector
     pub fn normalized(&self) -> Self {
         let n = self.norm();
-        Self::new(self.x / n, self.y / n, self.z / n)
+        Vec3::new(self.x / n, self.y / n, self.z / n)
     }
 
     /// Cross product
     pub fn cross(&self, other: &Vec3) -> Self {
-        Self::new(
+        Vec3::new(
             self.y * other.z - self.z * other.y,
             self.z * other.x - self.x * other.z,
             self.x * other.y - self.y * other.x,
@@ -36,7 +40,7 @@ impl Vec3 {
 
     /// Multiply by scalar
     pub fn mul_scalar(&self, s: f64) -> Self {
-        Self::new(self.x * s, self.y * s, self.z * s)
+        Vec3::new(self.x * s, self.y * s, self.z * s)
     }
 }
 
@@ -63,8 +67,6 @@ pub fn apply_matrix3(m: &[f64; 9], v: &Vec3) -> Vec3 {
     )
 }
 
-use crate::ga::geometric_product_full;
-
 /// GA rotor for 3D rotations
 pub struct Rotor3 {
     mv: [f64; 8],   // multivector components
@@ -80,50 +82,41 @@ impl Rotor3 {
         let w = half.cos();
         let s = half.sin();
         let axis_norm = axis.normalized();
-        // Bivector parts (with GA sign convention)
-        let b23 = -axis_norm.x * s;
-        let b31 = -axis_norm.y * s;
-        let b12 = -axis_norm.z * s;
+        // Initialize GA multivector: scalar + bivector parts
         let mut mv = [0.0; 8];
         mv[0] = w;
-        mv[4] = b23;
-        mv[5] = b31;
-        mv[6] = b12;
+        mv[4] = -axis_norm.x * s; // e23
+        mv[5] = -axis_norm.y * s; // e31
+        mv[6] = -axis_norm.z * s; // e12
         Self { mv, axis: axis_norm, w, s }
-    }
-
-    /// Reverse (conjugate) of the rotor: invert bivector parts.
-    pub fn conjugate(&self) -> Self {
-        let mut mv_conj = self.mv;
-        mv_conj[4] = -mv_conj[4];
-        mv_conj[5] = -mv_conj[5];
-        mv_conj[6] = -mv_conj[6];
-        Self {
-            mv: mv_conj,
-            axis: self.axis,
-            w: self.w,
-            s: self.s,
-        }
     }
 
     /// Rotate a Vec3 using the GA sandwich product: r * v * r⁻¹.
     pub fn rotate(&self, v: &Vec3) -> Vec3 {
-        // Promote v to a pure-vector multivector
+        // Promote to multivector
         let mut v_mv = [0.0; 8];
         v_mv[1] = v.x;
         v_mv[2] = v.y;
         v_mv[3] = v.z;
+
         // r * v
         let mut tmp = [0.0; 8];
         geometric_product_full(&self.mv, &v_mv, &mut tmp);
+
+        // r_conj = r⁻¹
+        let mut mv_conj = self.mv;
+        mv_conj[4] = -mv_conj[4];
+        mv_conj[5] = -mv_conj[5];
+        mv_conj[6] = -mv_conj[6];
+
         // (r * v) * r⁻¹
-        let rot_conj = self.conjugate();
         let mut res_mv = [0.0; 8];
-        geometric_product_full(&tmp, &rot_conj.mv, &mut res_mv);
+        geometric_product_full(&tmp, &mv_conj, &mut res_mv);
+
         Vec3::new(res_mv[1], res_mv[2], res_mv[3])
     }
 
-    /// Fast rotate using quaternion-style formula (~20 flops), fully inlined and unrolled.
+    /// Fast rotate using chained FMA operations
     #[inline(always)]
     pub fn rotate_fast(&self, v: &Vec3) -> Vec3 {
         let ax = self.axis.x;
@@ -132,28 +125,59 @@ impl Rotor3 {
         let vx = v.x;
         let vy = v.y;
         let vz = v.z;
-
         // t = axis × v
         let tx = ay * vz - az * vy;
         let ty = az * vx - ax * vz;
         let tz = ax * vy - ay * vx;
-
-        // uxt = axis × t
+        // u = axis × t
         let ux = ay * tz - az * ty;
         let uy = az * tx - ax * tz;
         let uz = ax * ty - ay * tx;
-
-        let k1 = 2.0 * self.w * self.s;        // scalar
+        let k1 = 2.0 * self.w * self.s;
         let k2 = 2.0 * self.s * self.s;
-
-        // chain two mul_adds per component:
-        let x = k1.mul_add(tx, vx);            // vx + k1*tx
-        let x = k2.mul_add(ux, x);             // (vx + k1*tx) + k2*ux
-        let y = k1.mul_add(ty, vy);
-        let y = k2.mul_add(uy, y);
-        let z = k1.mul_add(tz, vz);
-        let z = k2.mul_add(uz, z);
-
+        // FMA chains
+        let x = k2.mul_add(ux, k1.mul_add(tx, vx));
+        let y = k2.mul_add(uy, k1.mul_add(ty, vy));
+        let z = k2.mul_add(uz, k1.mul_add(tz, vz));
         Vec3::new(x, y, z)
+    }
+
+    /// SIMD rotate 4 Vec3s in parallel using wide::f64x4
+    #[inline(always)]
+    pub fn rotate_simd(&self, vs: &[Vec3; 4]) -> [Vec3; 4] {
+        // Broadcast axis components into lanes
+        let ax = f64x4::splat(self.axis.x);
+        let ay = f64x4::splat(self.axis.y);
+        let az = f64x4::splat(self.axis.z);
+        // Load input Vec3s into SIMD lanes
+        let vx = f64x4::from([vs[0].x, vs[1].x, vs[2].x, vs[3].x]);
+        let vy = f64x4::from([vs[0].y, vs[1].y, vs[2].y, vs[3].y]);
+        let vz = f64x4::from([vs[0].z, vs[1].z, vs[2].z, vs[3].z]);
+        // Compute t = axis × v
+        let tx = ay * vz - az * vy;
+        let ty = az * vx - ax * vz;
+        let tz = ax * vy - ay * vx;
+        // Compute u = axis × t
+        let ux = ay * tz - az * ty;
+        let uy = az * tx - ax * tz;
+        let uz = ax * ty - ay * tx;
+        // Broadcast scalar coefficients
+        let k1 = f64x4::splat(2.0 * self.w * self.s);
+        let k2 = f64x4::splat(2.0 * self.s * self.s);
+        // Chain FMAs: result lanes
+        let rx = k2.mul_add(ux, k1.mul_add(tx, vx));
+        let ry = k2.mul_add(uy, k1.mul_add(ty, vy));
+        let rz = k2.mul_add(uz, k1.mul_add(tz, vz));
+        // Extract back to scalar Vec3s
+        let arrx = rx.to_array();
+        let arry = ry.to_array();
+        let arrz = rz.to_array();
+
+        [
+            Vec3::new(arrx[0], arry[0], arrz[0]),
+            Vec3::new(arrx[1], arry[1], arrz[1]),
+            Vec3::new(arrx[2], arry[2], arrz[2]),
+            Vec3::new(arrx[3], arry[3], arrz[3]),
+        ]
     }
 }
