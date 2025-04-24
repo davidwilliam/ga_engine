@@ -24,15 +24,19 @@
 ## Key Findings
 
 1. **Correctness**  
-   - All unit tests pass: linear algebra, GA products, rotors, SIMD, high-level ops.  
-2. **Performance**  
-   - **Classical** 8×8 × 1 000: **~260 µs**  
-   - **GA** full 8D × 1 000: **~45 µs** (~5.8× faster)  
-   - **rotate 3D** classical: **~5.6 µs**  
-   - **rotate GA (sandwich)**: **~96 µs**  
-   - **rotate GA (fast)**: **~7.9 µs** (~1.4× slower than classical)  
-   - **rotate GA SIMD 4×**: **~10 µs** (~2.3× per vector)  
-   - **rotate GA SIMD 8×**: **~12.3 µs** (~3.7× per vector)  
+   - All unit tests pass: linear algebra, GA products, rotors, SIMD, high-level ops.
+
+2. **Performance**
+
+| Benchmark                           | Time            | Relative Speed                |
+|-------------------------------------|----------------:|-------------------------------|
+| Classical 8×8 × 1 000               | ~260 µs         | —                             |
+| GA full 8D × 1 000                  | ~45 µs          | ≈ 5.8× faster                 |
+| rotate 3D classical                 | ~5.6 µs         | —                             |
+| rotate GA (sandwich)                | ~96 µs          | ≈ 17× slower (avoid in hot loops) |
+| rotate GA (fast)                    | ~7.9 µs         | ≈ 1.4× slower                 |
+| rotate GA SIMD 4× (batch of 4)      | ~10 µs          | ≈ 2.3× faster per vector      |
+| rotate GA SIMD 8× (batch of 8)      | ~12.3 µs        | ≈ 3.7× faster per vector      |
 
 ## How to Reproduce
 
