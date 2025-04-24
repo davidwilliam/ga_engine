@@ -69,3 +69,10 @@ fn test_mul_scalar() {
     let w = v * 3.0;
     assert_eq!(w, Vec3::new(6.0, -9.0, 1.5));
 }
+
+#[test]
+fn test_display_rounded() {
+    let v = Vec3::new(1.23456789, -2.3456789, 3.456789);
+    let s = format!("{}", ga_engine::vector::Rounded::new(&v, 3));
+    assert_eq!(s, "Vec3 { x: 1.235, y: -2.346, z: 3.457 }");
+}

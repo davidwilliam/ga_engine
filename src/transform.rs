@@ -1,4 +1,4 @@
-// src/transform.rs
+//! src/transform.rs
 //! Classical ↔ GA transformation adapters.
 
 use crate::vector::Vec3;

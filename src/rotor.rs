@@ -1,4 +1,5 @@
 // src/rotor.rs
+//! A 3-D rotor (unit even multivector) for rotations.
 
 use crate::{
   vector::Vec3,
@@ -17,15 +18,13 @@ pub struct Rotor3 {
 }
 
 impl Rotor3 {
-  /// Build a rotor from `axis` and `angle` (radians).
+  /// Construct a rotor from `axis` and `angle` (in radians).
   pub fn from_axis_angle(axis: Vec3, angle: f64) -> Self {
       let half = angle * 0.5;
       let w = half.cos();
       let s = half.sin();
-      // normalize axis
       let axis_norm = axis.scale(1.0 / axis.norm());
 
-      // build the full multivector
       let mut m = Multivector3::zero();
       m.scalar = w;
       m.bivector = Bivector3::new(
@@ -37,7 +36,7 @@ impl Rotor3 {
       Rotor3 { inner: m, axis: axis_norm, w, s }
   }
 
-  /// Rotate a vector via sandwich product: r * v * r⁻¹.
+  /// Rotate a vector via the sandwich product: r * v * r⁻¹.
   pub fn rotate(&self, v: Vec3) -> Vec3 {
       let mv = Multivector3::from_vector(v);
       let r = &self.inner;
@@ -45,7 +44,7 @@ impl Rotor3 {
       r.gp(&mv).gp(&r_inv).vector
   }
 
-  /// Fast quaternion‐style rotate (~20 flops), fully inlined.
+  /// Fast quaternion-style rotation (~20 flops), fully inlined.
   #[inline(always)]
   pub fn rotate_fast(&self, v: Vec3) -> Vec3 {
       let ax = self.axis.x;
@@ -68,7 +67,6 @@ impl Rotor3 {
       let k1 = 2.0 * self.w * self.s;
       let k2 = 2.0 * self.s * self.s;
 
-      // chain two FMA per component
       let x = k2.mul_add(ux, k1.mul_add(tx, vx));
       let y = k2.mul_add(uy, k1.mul_add(ty, vy));
       let z = k2.mul_add(uz, k1.mul_add(tz, vz));
@@ -76,7 +74,7 @@ impl Rotor3 {
       Vec3::new(x, y, z)
   }
 
-  /// SIMD‐4× rotate using `wide::f64x4`.
+  /// SIMD-4× rotate using `wide::f64x4`.
   #[inline(always)]
   pub fn rotate_simd(&self, vs: [Vec3; 4]) -> [Vec3; 4] {
       let ax = f64x4::splat(self.axis.x);
@@ -114,15 +112,11 @@ impl Rotor3 {
       ]
   }
 
-  /// SIMD‐8× rotate by running two 4× lanes.
+  /// SIMD-8× rotate by two 4-lane SIMD passes.
   #[inline(always)]
   pub fn rotate_simd8(&self, vs: [Vec3; 8]) -> [Vec3; 8] {
-      // first half
       let r0 = self.rotate_simd([vs[0], vs[1], vs[2], vs[3]]);
-      // second half
       let r1 = self.rotate_simd([vs[4], vs[5], vs[6], vs[7]]);
-      // combine
-      [r0[0], r0[1], r0[2], r0[3],
-       r1[0], r1[1], r1[2], r1[3]]
+      [r0[0], r0[1], r0[2], r0[3], r1[0], r1[1], r1[2], r1[3]]
   }
 }
