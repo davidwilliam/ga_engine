@@ -1,5 +1,5 @@
 // examples/rotate_cloud_opt.rs
-use ga_engine::{Vec3, Rotor3, apply_matrix3};
+use ga_engine::prelude::*;
 use std::time::Instant;
 
 const N_POINTS: usize = 100_000;

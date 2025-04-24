@@ -1,5 +1,5 @@
 // src/rotor.rs
-//! A 3-D rotor (unit even multivector) for rotations.
+//! A 3-D rotor (unit even multivector) for rotations via Geometric Algebra.
 
 use crate::{
   vector::Vec3,
@@ -18,7 +18,7 @@ pub struct Rotor3 {
 }
 
 impl Rotor3 {
-  /// Construct a rotor from `axis` and `angle` (in radians).
+  /// Construct a rotor from an axis (unit Vec3) and an angle (radians).
   pub fn from_axis_angle(axis: Vec3, angle: f64) -> Self {
       let half = angle * 0.5;
       let w = half.cos();
@@ -36,12 +36,35 @@ impl Rotor3 {
       Rotor3 { inner: m, axis: axis_norm, w, s }
   }
 
+  /// Construct a rotor by exponentiating a pure bivector `b`: `exp(b)`.
+  ///
+  /// If `b` is zero, returns the identity rotor.
+  pub fn from_bivector(b: Bivector3) -> Self {
+      let phi = (b.xy * b.xy + b.yz * b.yz + b.zx * b.zx).sqrt();
+      if phi == 0.0 {
+          // identity rotor
+          return Rotor3::from_axis_angle(Vec3::new(1.0, 0.0, 0.0), 0.0);
+      }
+      let scalar = phi.cos();
+      let sin_phi = phi.sin();
+      // build inner multivector
+      let mut m = Multivector3::zero();
+      m.scalar = scalar;
+      m.bivector = Bivector3::new(
+          b.xy / phi * sin_phi,
+          b.yz / phi * sin_phi,
+          b.zx / phi * sin_phi,
+      );
+      // extract rotation axis via dual of bivector
+      let axis = Vec3::new(b.xy / phi, b.yz / phi, b.zx / phi);
+      Rotor3 { inner: m, axis, w: scalar, s: sin_phi }
+  }
+
   /// Rotate a vector via the sandwich product: r * v * r⁻¹.
   pub fn rotate(&self, v: Vec3) -> Vec3 {
       let mv = Multivector3::from_vector(v);
-      let r = &self.inner;
-      let r_inv = r.reverse();
-      r.gp(&mv).gp(&r_inv).vector
+      let r_inv = self.inner.reverse();
+      self.inner.gp(&mv).gp(&r_inv).vector
   }
 
   /// Fast quaternion-style rotation (~20 flops), fully inlined.
@@ -67,14 +90,14 @@ impl Rotor3 {
       let k1 = 2.0 * self.w * self.s;
       let k2 = 2.0 * self.s * self.s;
 
-      let x = k2.mul_add(ux, k1.mul_add(tx, vx));
-      let y = k2.mul_add(uy, k1.mul_add(ty, vy));
-      let z = k2.mul_add(uz, k1.mul_add(tz, vz));
-
-      Vec3::new(x, y, z)
+      Vec3::new(
+          k2.mul_add(ux, k1.mul_add(tx, vx)),
+          k2.mul_add(uy, k1.mul_add(ty, vy)),
+          k2.mul_add(uz, k1.mul_add(tz, vz)),
+      )
   }
 
-  /// SIMD-4× rotate using `wide::f64x4`.
+  /// SIMD-4× rotate of four Vec3s in parallel using `wide::f64x4`.
   #[inline(always)]
   pub fn rotate_simd(&self, vs: [Vec3; 4]) -> [Vec3; 4] {
       let ax = f64x4::splat(self.axis.x);
@@ -112,7 +135,7 @@ impl Rotor3 {
       ]
   }
 
-  /// SIMD-8× rotate by two 4-lane SIMD passes.
+  /// SIMD-8× rotate by running two 4-lane SIMD passes.
   #[inline(always)]
   pub fn rotate_simd8(&self, vs: [Vec3; 8]) -> [Vec3; 8] {
       let r0 = self.rotate_simd([vs[0], vs[1], vs[2], vs[3]]);

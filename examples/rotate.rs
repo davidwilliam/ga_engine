@@ -1,7 +1,5 @@
 // examples/rotate.rs
-use ga_engine::{Vec3, Rotor3};
-use ga_engine::transform::apply_matrix3;
-use ga_engine::vector::Rounded;
+use ga_engine::prelude::*;
 
 fn main() {
     // original point

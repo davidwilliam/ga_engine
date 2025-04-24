@@ -1,5 +1,5 @@
 // examples/rotate_cloud.rs
-use ga_engine::{apply_matrix3, Rotor3, Vec3};
+use ga_engine::prelude::*;
 use std::time::Instant;
 
 /// Simple 64-bit LCG for reproducible “random” floats in [0,1).
