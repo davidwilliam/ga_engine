@@ -25,6 +25,7 @@ pub mod bivector;
 pub mod classical;
 pub mod ga;
 pub mod multivector;
+pub mod numerical_checks;
 pub mod ops;
 pub mod prelude;
 pub mod rotor;
