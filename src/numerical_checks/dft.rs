@@ -22,27 +22,39 @@ pub fn classical_dft(input: &[Complex<f64>]) -> Vec<Complex<f64>> {
         .collect()
 }
 
-/// GA DFT using specialized 2D multivector (Multivector2)
+/// Optimized GA DFT using rotor recurrence (no trig inside loops)
 pub fn ga_dft(input: &[Multivector2]) -> Vec<Multivector2> {
     let n = input.len();
-    (0..n)
-        .map(|k| {
-            let mut sum = Multivector2::zero();
-            for (n_idx, x_n) in input.iter().enumerate() {
-                let angle = -2.0 * PI * (k as f64) * (n_idx as f64) / (n as f64);
-                // e^(iθ) = cos(θ) + sin(θ) e12
-                let rotor = Multivector2::new(
-                    angle.cos(), // scalar part
-                    0.0,         // e1
-                    0.0,         // e2
-                    angle.sin(), // e12
-                );
-                let product = rotor.gp(*x_n);
-                sum = sum + product;
-            }
-            sum
-        })
-        .collect()
+    let mut output = Vec::with_capacity(n);
+
+    for k in 0..n {
+        let delta = -2.0 * PI * (k as f64) / (n as f64);
+        let cos_delta = delta.cos();
+        let sin_delta = delta.sin();
+
+        // Start with angle 0
+        let mut cos_theta = 1.0;
+        let mut sin_theta = 0.0;
+
+        let mut sum = Multivector2::zero();
+
+        for x_n in input {
+            // rotor = cos(θ) + sin(θ) * e12
+            let rotor = Multivector2::new(cos_theta, 0.0, 0.0, sin_theta);
+            let product = rotor.gp(*x_n);
+            sum = sum + product;
+
+            // Recurrence update:
+            let new_cos = cos_theta * cos_delta - sin_theta * sin_delta;
+            let new_sin = sin_theta * cos_delta + cos_theta * sin_delta;
+            cos_theta = new_cos;
+            sin_theta = new_sin;
+        }
+
+        output.push(sum);
+    }
+
+    output
 }
 
 /// Compare two sequences (Complex ↔ Multivector2)
