@@ -1,10 +1,8 @@
-// src/nd/multivector.rs
 //! N-dimensional multivectors and geometric product.
 //!
 //! A multivector in N-dimensional Euclidean space has 2^N components,
 //! one for each basis blade.
 
-use crate::nd::gp::make_gp_table;
 use crate::nd::types::Scalar;
 use std::ops::{Add, Mul, Sub};
 
@@ -37,23 +35,35 @@ impl<const N: usize> Multivector<N> {
         }
     }
 
-    /// Geometric product: `self * other`, using a runtime GP lookup table.
+    /// Geometric product: `self * other`, using inline sign/index computation.
     pub fn gp(&self, other: &Self) -> Self {
         let m = 1 << N;
-        // build (or cache) the GP table for this dimension
-        let table = make_gp_table(N);
         let mut out = vec![0.0 as Scalar; m];
         for i in 0..m {
             let a = self.data[i];
-            if a == 0.0 as Scalar {
-                continue;
-            }
+            if a == 0.0 { continue; }
             for j in 0..m {
                 let b = other.data[j];
-                if b == 0.0 as Scalar {
-                    continue;
+                if b == 0.0 { continue; }
+
+                let k = i ^ j;
+
+                let mut sgn = 1i32;
+                for bit in 0..N {
+                    if (i >> bit) & 1 != 0 {
+                        let mut lower = j & ((1 << bit) - 1);
+                        let mut cnt = 0;
+                        while lower != 0 {
+                            cnt += lower & 1;
+                            lower >>= 1;
+                        }
+                        if cnt & 1 != 0 {
+                            sgn = -sgn;
+                        }
+                    }
                 }
-                let (sign, k) = table[i * m + j];
+
+                let sign = if sgn > 0 { 1.0 } else { -1.0 };
                 out[k] += sign * a * b;
             }
         }

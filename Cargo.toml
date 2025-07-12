@@ -64,3 +64,67 @@ path    = "benches/ga_variants.rs"
 [[bench]]
 name = "dft_bench"
 harness = false
+
+[[bench]]
+name = "dft_vector_bench"
+harness = false
+
+[[bench]]
+name = "dft_structured_bench"
+harness = false
+
+[[bench]]
+name = "rotor_vs_matrix_rotation"
+harness = false
+
+[[bench]]
+name = "matrix_vector"
+harness = false
+
+[[bench]]
+name = "lattice_orthogonalization"
+harness = false
+
+[[bench]]
+name = "lattice_orthogonalization_8d"
+harness = false
+
+[[bench]]
+name = "ga_orthogonalization_8d"
+harness = false
+
+[[bench]]
+name = "lattice_orthogonalization_4d"
+harness = false
+
+[[bench]]
+name = "ga_orthogonalization_4d"
+harness = false
+
+[[bench]]
+name = "lattice_orthogonalization_16d"
+harness = false
+
+[[bench]]
+name = "ga_orthogonalization_16d"
+harness = false
+
+[[bench]]
+name = "svp_3d"
+harness = false
+
+[[bench]]
+name = "svp_8d"
+harness = false
+
+[[bench]]
+name = "motor_transform"
+harness = false
+
+[[bench]]
+name = "reflection_chain"
+harness = false
+
+[[bench]]
+name = "svp_32d"
+harness = false
