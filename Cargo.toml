@@ -73,6 +73,11 @@ harness = false
 path    = "benches/matrix_to_multivector_mapping.rs"
 
 [[bench]]
+name    = "matrix_to_multivector_16x16"
+harness = false
+path    = "benches/matrix_to_multivector_16x16.rs"
+
+[[bench]]
 name    = "matrix_matrixmultiply"
 harness = false
 path    = "benches/matrix_matrixmultiply.rs"
