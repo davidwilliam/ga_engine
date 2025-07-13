@@ -16,3 +16,6 @@ pub use crate::vector::{Rounded, Vec3};
 pub use crate::classical::multiply_matrices;
 pub use crate::ga::{geometric_product, geometric_product_full};
 pub use crate::transform::apply_matrix3;
+
+// specialized numerical types
+pub use crate::numerical_checks::multivector2::Multivector2;

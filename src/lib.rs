@@ -54,3 +54,6 @@ pub use ops::reflection::*;
 // N-dimensional types
 pub use nd::multivector::Multivector;
 pub use nd::vecn::VecN;
+
+// Specialized numerical types
+pub use numerical_checks::multivector2::Multivector2;

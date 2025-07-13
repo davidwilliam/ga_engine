@@ -20,6 +20,7 @@ wide            = "0.7"
 ndarray  = { version = "0.15", features = ["blas"] }
 blas-src = { version = "0.10", features = ["accelerate"] }
 rustfft = "6.1"
+rayon = "1.8"
 
 [dev-dependencies]
 criterion      = { version = "0.4", features = ["html_reports"] }
@@ -47,6 +48,31 @@ harness = false
 path    = "benches/classical.rs"
 
 [[bench]]
+name    = "lll_simple"
+harness = false
+path    = "benches/lll_simple.rs"
+
+[[bench]]
+name    = "lll_algorithm"
+harness = false
+path    = "benches/lll_algorithm.rs"
+
+[[bench]]
+name    = "lll_theoretical_analysis"
+harness = false
+path    = "benches/lll_theoretical_analysis.rs"
+
+[[bench]]
+name    = "test_minimal"
+harness = false
+path    = "benches/test_minimal.rs"
+
+[[bench]]
+name    = "matrix_to_multivector_mapping"
+harness = false
+path    = "benches/matrix_to_multivector_mapping.rs"
+
+[[bench]]
 name    = "matrix_matrixmultiply"
 harness = false
 path    = "benches/matrix_matrixmultiply.rs"
@@ -55,6 +81,11 @@ path    = "benches/matrix_matrixmultiply.rs"
 name    = "matrix_ndarray"
 harness = false
 path    = "benches/matrix_ndarray.rs"
+
+[[bench]]
+name    = "matrix_ndarray_8x8"
+harness = false
+path    = "benches/matrix_ndarray_8x8.rs"
 
 [[bench]]
 name    = "ga_variants"
@@ -79,6 +110,10 @@ harness = false
 
 [[bench]]
 name = "matrix_vector"
+harness = false
+
+[[bench]]
+name = "matrix_subspace_comprehensive"
 harness = false
 
 [[bench]]
@@ -113,6 +148,19 @@ harness = false
 name = "svp_3d"
 harness = false
 
+[[example]]
+name = "lattice_crypto_example"
+path = "examples/lattice_crypto_example.rs"
+
+[[example]]
+name = "ml_feature_transform"
+path = "examples/ml_feature_transform.rs"
+harness = false
+
+[[example]]
+name = "block_matrix_concept"
+path = "examples/block_matrix_concept.rs"
+
 [[bench]]
 name = "svp_8d"
 harness = false
@@ -127,4 +175,12 @@ harness = false
 
 [[bench]]
 name = "svp_32d"
+harness = false
+
+[[bench]]
+name = "multivector_2d_vs_matrix_2x2"
+harness = false
+
+[[bench]]
+name = "block_matrix_2x2"
 harness = false
