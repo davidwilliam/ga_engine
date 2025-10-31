@@ -35,6 +35,12 @@ pub mod vector;
 // N-dimensional GA support
 pub mod nd;
 
+// NTRU cryptography support
+pub mod ntru;
+
+// CRYSTALS-Kyber cryptography support
+pub mod kyber;
+
 // --- Public API exports ---
 
 // 3D types and operations

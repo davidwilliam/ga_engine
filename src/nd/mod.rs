@@ -1,5 +1,6 @@
 pub mod ga;
 pub mod ga4d_optimized;
+pub mod gp;
 pub mod multivector;
 pub mod types;
 pub mod vecn;

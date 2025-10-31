@@ -21,12 +21,12 @@ ndarray  = { version = "0.15", features = ["blas"] }
 blas-src = { version = "0.10", features = ["accelerate"] }
 rustfft = "6.1"
 rayon = "1.8"
+rand = "0.8"
 
 [dev-dependencies]
 criterion      = { version = "0.4", features = ["html_reports"] }
 matrixmultiply = "0.3"
 nalgebra       = "0.32"
-rand = "0.8"
 
 [[bin]]
 name = "coverage_summary"
@@ -188,4 +188,36 @@ harness = false
 
 [[bench]]
 name = "block_matrix_2x2"
+harness = false
+
+[[bench]]
+name = "ntru_polynomial_multiplication"
+harness = false
+
+[[bench]]
+name = "kyber_batch_encryption"
+harness = false
+
+[[bench]]
+name = "ntru_scaling_large_n"
+harness = false
+
+[[bench]]
+name = "ntru_operations_only"
+harness = false
+
+[[bench]]
+name = "ntru_block_decomposition_test"
+harness = false
+
+[[bench]]
+name = "matrix_mult_block_ga"
+harness = false
+
+[[bench]]
+name = "matrix_vector_as_sparse_matrix"
+harness = false
+
+[[bench]]
+name = "raw_operation_analysis"
 harness = false
