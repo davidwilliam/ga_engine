@@ -21,12 +21,15 @@
 #![doc = include_str!("../README.md")]
 
 // Core modules
+pub mod barrett;  // Barrett reduction for fast modular arithmetic
 pub mod bivector;
 pub mod classical;
 pub mod clifford_ring;
+pub mod clifford_ring_int;  // Integer arithmetic for cryptography
 pub mod fast_rng;
 pub mod ga;
 pub mod ga_simd_optimized;
+pub mod lazy_reduction;  // Lazy modular reduction for performance
 pub mod multivector;
 pub mod numerical_checks;
 pub mod ops;
