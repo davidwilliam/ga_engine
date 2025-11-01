@@ -46,6 +46,7 @@
 //! // mv_c should equal mv_a ⊗ mv_b
 //! ```
 
+pub mod automorphisms;
 pub mod ckks;
 pub mod encoding;
 pub mod geometric_product;
