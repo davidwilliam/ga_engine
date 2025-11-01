@@ -18,6 +18,9 @@ pub struct NTTContext {
     pub n_inv: i64,          // N^(-1) for normalization
     pub psi: Vec<i64>,       // Twiddle factors: ψ[k] = ω^k mod q
     pub psi_inv: Vec<i64>,   // Inverse twiddle factors
+    pub psi_mont: Vec<i64>,  // Twiddle factors in Montgomery form (for Montgomery NTT)
+    pub psi_inv_mont: Vec<i64>, // Inverse twiddle factors in Montgomery form
+    pub n_inv_mont: i64,     // N^(-1) in Montgomery form
 }
 
 impl NTTContext {
@@ -39,6 +42,18 @@ impl NTTContext {
             psi_inv[k] = mod_pow(omega_inv, k as i64, q);
         }
 
+        // Precompute Montgomery-form twiddle factors
+        use crate::montgomery::MontgomeryContext;
+        let mont = MontgomeryContext::new(q);
+
+        let mut psi_mont = vec![0i64; 2 * n];
+        let mut psi_inv_mont = vec![0i64; 2 * n];
+        for k in 0..(2 * n) {
+            psi_mont[k] = mont.to_montgomery(psi[k]);
+            psi_inv_mont[k] = mont.to_montgomery(psi_inv[k]);
+        }
+        let n_inv_mont = mont.to_montgomery(n_inv);
+
         Self {
             q,
             n,
@@ -47,6 +62,9 @@ impl NTTContext {
             n_inv,
             psi,
             psi_inv,
+            psi_mont,
+            psi_inv_mont,
+            n_inv_mont,
         }
     }
 

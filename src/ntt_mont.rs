@@ -146,11 +146,9 @@ fn ntt_forward_montgomery(a: &mut [i64], ntt: &NTTContext, mont: &MontgomeryCont
             for j in start..(start + half) {
                 let u = a[j];
 
-                // Multiply by twiddle factor in Montgomery domain
-                // psi[k] is in normal form, a[j+half] is in Montgomery form
-                // We need: v = a[j+half] × psi[k] in Montgomery
-                let twiddle_mont = mont.to_montgomery(ntt.psi[k]);
-                let v = mont.mul_montgomery(a[j + half], twiddle_mont);
+                // Use PRECOMPUTED Montgomery twiddle factor (key optimization!)
+                // ntt.psi_mont[k] is already in Montgomery form - no conversion needed!
+                let v = mont.mul_montgomery(a[j + half], ntt.psi_mont[k]);
 
                 // Butterfly
                 a[j] = mont.add_montgomery(u, v);
@@ -200,9 +198,8 @@ fn ntt_inverse_montgomery(a: &mut [i64], ntt: &NTTContext, mont: &MontgomeryCont
             for j in start..(start + half) {
                 let u = a[j];
 
-                // Multiply by inverse twiddle factor in Montgomery domain
-                let twiddle_inv_mont = mont.to_montgomery(ntt.psi_inv[k]);
-                let v = mont.mul_montgomery(a[j + half], twiddle_inv_mont);
+                // Use PRECOMPUTED inverse twiddle factor in Montgomery form!
+                let v = mont.mul_montgomery(a[j + half], ntt.psi_inv_mont[k]);
 
                 // Butterfly
                 a[j] = mont.add_montgomery(u, v);
@@ -215,10 +212,9 @@ fn ntt_inverse_montgomery(a: &mut [i64], ntt: &NTTContext, mont: &MontgomeryCont
         len *= 2;
     }
 
-    // Normalize by N^(-1) (in Montgomery form!)
-    let n_inv_mont = mont.to_montgomery(ntt.n_inv);
+    // Normalize by N^(-1) (use PRECOMPUTED Montgomery form!)
     for i in 0..n {
-        a[i] = mont.mul_montgomery(a[i], n_inv_mont);
+        a[i] = mont.mul_montgomery(a[i], ntt.n_inv_mont);
     }
 }
 
