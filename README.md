@@ -227,22 +227,15 @@ spread = √(μ₄ / μ₂²)
 - No geometric structure (arbitrary linear algebra)
 - Numerical precision (floating-point accumulation)
 
-## 📄 Paper
+## 📄 Research Paper
 
 **Title**: "Merits of Geometric Algebra Applied to Cryptography and Machine Learning"
 
+**Author**: David William Silva
+
 **Abstract**: We present concrete, reproducible evidence that Geometric Algebra delivers measurable advantages in post-quantum cryptography and machine learning, including an illustrative Clifford-LWE-256 scheme achieving 8.90 µs encryption (competitive with Kyber-512) and +20% accuracy in 3D point cloud classification.
 
-**Paper**: [`paper/article.tex`](paper/article.tex)
-
-**Compile**:
-```bash
-cd paper
-pdflatex article.tex
-bibtex article
-pdflatex article.tex
-pdflatex article.tex
-```
+**Status**: In preparation (paper source files maintained separately)
 
 ## 🔬 Research Context
 
@@ -345,15 +338,11 @@ ga_engine/
 │   └── clifford_lwe_profile.rs             # Performance profiling
 ├── benches/
 │   └── clifford_ring_crypto.rs  # Criterion benchmarks
-├── paper/
-│   ├── article.tex              # Full paper
-│   └── references.bib           # Bibliography
 └── README.md                    # This file
 ```
 
 ## 🔗 Links
 
-- **Paper**: [`paper/article.tex`](paper/article.tex)
 - **Main Results**: [`FINAL_RESULTS.md`](FINAL_RESULTS.md)
 - **Optimization Details**: [`COMPLETE_OPTIMIZATION_RESULTS.md`](COMPLETE_OPTIMIZATION_RESULTS.md)
 
