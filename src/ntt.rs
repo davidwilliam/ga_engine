@@ -33,12 +33,15 @@ impl NTTContext {
 
     /// Create NTT context for Clifford-LWE-512
     ///
-    /// q = 3329, N = 64
-    /// ω = 33 (primitive 128th root of unity mod 3329)
-    /// ω^(-1) = 2522
-    /// N^(-1) = 3277
+    /// q = 12289, N = 64
+    /// ω = 81 (primitive 128th root of unity mod 12289)
+    /// ω^(-1) = 11227
+    /// N^(-1) = 12097
+    ///
+    /// Larger modulus (q=12289 vs 3329) provides 3.7× more error headroom
+    /// Expected: >99% correctness (vs 0.88% with q=3329)
     pub fn new_clifford_lwe_512() -> Self {
-        Self::new(3329, 64, 33, 2522, 3277)
+        Self::new(12289, 64, 81, 11227, 12097)
     }
 
     /// Create NTT context with explicit parameters
