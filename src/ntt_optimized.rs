@@ -28,6 +28,17 @@ impl OptimizedNTTContext {
         }
     }
 
+    /// Create optimized NTT context for Clifford-LWE-512
+    pub fn new_clifford_lwe_512() -> Self {
+        let base = NTTContext::new_clifford_lwe_512();
+        let bit_rev_indices = Self::precompute_bit_reversal(base.n);
+
+        Self {
+            base,
+            bit_rev_indices,
+        }
+    }
+
     /// Precompute bit-reversal permutation indices
     ///
     /// Instead of computing this in every NTT call, compute once and reuse.

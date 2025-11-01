@@ -31,6 +31,16 @@ impl NTTContext {
         Self::new(3329, 32, 1996, 1426, 3225)
     }
 
+    /// Create NTT context for Clifford-LWE-512
+    ///
+    /// q = 3329, N = 64
+    /// ω = 33 (primitive 128th root of unity mod 3329)
+    /// ω^(-1) = 2522
+    /// N^(-1) = 3277
+    pub fn new_clifford_lwe_512() -> Self {
+        Self::new(3329, 64, 33, 2522, 3277)
+    }
+
     /// Create NTT context with explicit parameters
     pub fn new(q: i64, n: usize, omega: i64, omega_inv: i64, n_inv: i64) -> Self {
         let mut psi = vec![0i64; 2 * n];
