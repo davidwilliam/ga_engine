@@ -343,8 +343,8 @@ ga_engine/
 
 ## 🔗 Links
 
-- **Main Results**: [`FINAL_RESULTS.md`](FINAL_RESULTS.md)
-- **Optimization Details**: [`COMPLETE_OPTIMIZATION_RESULTS.md`](COMPLETE_OPTIMIZATION_RESULTS.md)
+- **Detailed Results**: [`FINAL_RESULTS.md`](FINAL_RESULTS.md) - Complete optimization story and performance breakdown
+- **Future Plans**: [`ROADMAP.md`](ROADMAP.md) - Current status and next steps
 
 ---
 
