@@ -31,6 +31,8 @@ pub mod ntt;  // Number Theoretic Transform for O(N log N) polynomial multiplica
 pub mod ntt_clifford;  // NTT extended to Clifford ring polynomials
 pub mod ntt_simd;  // SIMD-batched NTT for parallel component processing
 pub mod ntt_clifford_simd;  // SIMD-batched Clifford NTT
+pub mod ntt_optimized;  // Optimized NTT with precomputed bit-reversal and lazy normalization
+pub mod ntt_clifford_optimized;  // Optimized Clifford NTT (fastest!)
 pub mod fast_rng;
 pub mod shake_rng;  // SHAKE128-based deterministic RNG (Kyber-style)
 pub mod shake_poly;  // Fast polynomial generation using SHAKE128
