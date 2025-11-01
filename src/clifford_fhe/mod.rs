@@ -48,11 +48,13 @@
 
 pub mod ckks;
 pub mod encoding;
+pub mod geometric_product;
 pub mod keys;
 pub mod params;
 
 // Re-exports
 pub use ckks::{Ciphertext, Plaintext};
 pub use encoding::{decode_multivector, encode_multivector};
+pub use geometric_product::geometric_product_homomorphic;
 pub use keys::{EvaluationKey, PublicKey, SecretKey};
 pub use params::CliffordFHEParams;
