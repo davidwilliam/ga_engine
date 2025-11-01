@@ -35,6 +35,8 @@ pub mod shake_poly;  // Fast polynomial generation using SHAKE128
 pub mod ga;
 pub mod ga_simd_optimized;
 pub mod lazy_reduction;  // Lazy modular reduction for performance
+pub mod montgomery;  // Montgomery reduction (Kyber-style, ~2× faster than % operator)
+pub mod ntt_mont;  // NTT + Montgomery (fastest combination!)
 pub mod multivector;
 pub mod numerical_checks;
 pub mod ops;

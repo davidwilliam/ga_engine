@@ -10,6 +10,7 @@
 
 use crate::barrett::BarrettContext;
 use crate::lazy_reduction::LazyReductionContext;
+use crate::montgomery::MontgomeryContext;
 use crate::clifford_ring_simd::geometric_product_lazy_optimized;
 
 /// Clifford algebra Cl(3,0) ring element with integer coefficients
@@ -316,6 +317,150 @@ impl CliffordRingElementInt {
         for i in 0..8 {
             result.coeffs[i] = lazy.finalize(result.coeffs[i]);
         }
+    }
+
+    /// Geometric product with Montgomery reduction (Kyber-style!)
+    /// ~2× faster modular reduction than standard % operator
+    ///
+    /// NOTE: Input values should already be in Montgomery form!
+    /// Use mont.to_montgomery() to convert before calling this.
+    #[inline]
+    pub fn geometric_product_montgomery(&self, other: &Self, mont: &MontgomeryContext) -> Self {
+        let a = &self.coeffs;
+        let b = &other.coeffs;
+
+        let mut result = [0i64; 8];
+
+        // Same geometric product formulas, but use Montgomery multiplication
+        // Each multiplication automatically applies Montgomery reduction!
+
+        // Helper function for cleaner code
+        #[inline]
+        fn mmul(a: i64, b: i64, mont: &MontgomeryContext) -> i64 {
+            mont.mul_montgomery(a, b)
+        }
+
+        #[inline]
+        fn madd(x: i64, y: i64, mont: &MontgomeryContext) -> i64 {
+            mont.add_montgomery(x, y)
+        }
+
+        #[inline]
+        fn msub(x: i64, y: i64, mont: &MontgomeryContext) -> i64 {
+            mont.sub_montgomery(x, y)
+        }
+
+        // Scalar component (8 terms)
+        let t0 = mmul(a[0], b[0], mont);
+        let t1 = mmul(a[1], b[1], mont);
+        let t2 = mmul(a[2], b[2], mont);
+        let t3 = mmul(a[3], b[3], mont);
+        let t4 = mmul(a[4], b[4], mont);
+        let t5 = mmul(a[5], b[5], mont);
+        let t6 = mmul(a[6], b[6], mont);
+        let t7 = mmul(a[7], b[7], mont);
+
+        result[0] = madd(madd(madd(t0, t1, mont), t2, mont), t3, mont);
+        result[0] = msub(msub(msub(msub(result[0], t4, mont), t5, mont), t6, mont), t7, mont);
+
+        // e1 component
+        let t0 = mmul(a[0], b[1], mont);
+        let t1 = mmul(a[1], b[0], mont);
+        let t2 = mmul(a[2], b[4], mont);
+        let t3 = mmul(a[3], b[5], mont);
+        let t4 = mmul(a[4], b[2], mont);
+        let t5 = mmul(a[5], b[3], mont);
+        let t6 = mmul(a[6], b[7], mont);
+        let t7 = mmul(a[7], b[6], mont);
+
+        result[1] = madd(madd(t0, t1, mont), t3, mont);
+        result[1] = madd(result[1], t4, mont);
+        result[1] = msub(msub(msub(msub(result[1], t2, mont), t5, mont), t6, mont), t7, mont);
+
+        // e2 component
+        let t0 = mmul(a[0], b[2], mont);
+        let t1 = mmul(a[1], b[4], mont);
+        let t2 = mmul(a[2], b[0], mont);
+        let t3 = mmul(a[3], b[6], mont);
+        let t4 = mmul(a[4], b[1], mont);
+        let t5 = mmul(a[5], b[7], mont);
+        let t6 = mmul(a[6], b[3], mont);
+        let t7 = mmul(a[7], b[5], mont);
+
+        result[2] = madd(madd(madd(t0, t1, mont), t2, mont), t5, mont);
+        result[2] = madd(madd(result[2], t6, mont), t7, mont);
+        result[2] = msub(msub(result[2], t3, mont), t4, mont);
+
+        // e3 component
+        let t0 = mmul(a[0], b[3], mont);
+        let t1 = mmul(a[1], b[5], mont);
+        let t2 = mmul(a[2], b[6], mont);
+        let t3 = mmul(a[3], b[0], mont);
+        let t4 = mmul(a[4], b[7], mont);
+        let t5 = mmul(a[5], b[1], mont);
+        let t6 = mmul(a[6], b[2], mont);
+        let t7 = mmul(a[7], b[4], mont);
+
+        result[3] = madd(madd(t0, t2, mont), t3, mont);
+        result[3] = msub(msub(msub(msub(result[3], t1, mont), t4, mont), t5, mont), t6, mont);
+        result[3] = msub(result[3], t7, mont);
+
+        // e12 component
+        let t0 = mmul(a[0], b[4], mont);
+        let t1 = mmul(a[1], b[2], mont);
+        let t2 = mmul(a[2], b[1], mont);
+        let t3 = mmul(a[3], b[7], mont);
+        let t4 = mmul(a[4], b[0], mont);
+        let t5 = mmul(a[5], b[6], mont);
+        let t6 = mmul(a[6], b[5], mont);
+        let t7 = mmul(a[7], b[3], mont);
+
+        result[4] = madd(madd(madd(t0, t1, mont), t3, mont), t4, mont);
+        result[4] = madd(madd(result[4], t6, mont), t7, mont);
+        result[4] = msub(msub(result[4], t2, mont), t5, mont);
+
+        // e13 component
+        let t0 = mmul(a[0], b[5], mont);
+        let t1 = mmul(a[1], b[3], mont);
+        let t2 = mmul(a[2], b[7], mont);
+        let t3 = mmul(a[3], b[1], mont);
+        let t4 = mmul(a[4], b[6], mont);
+        let t5 = mmul(a[5], b[0], mont);
+        let t6 = mmul(a[6], b[4], mont);
+        let t7 = mmul(a[7], b[2], mont);
+
+        result[5] = madd(madd(madd(t0, t1, mont), t4, mont), t5, mont);
+        result[5] = msub(msub(msub(msub(result[5], t2, mont), t3, mont), t6, mont), t7, mont);
+
+        // e23 component
+        let t0 = mmul(a[0], b[6], mont);
+        let t1 = mmul(a[1], b[7], mont);
+        let t2 = mmul(a[2], b[3], mont);
+        let t3 = mmul(a[3], b[2], mont);
+        let t4 = mmul(a[4], b[5], mont);
+        let t5 = mmul(a[5], b[4], mont);
+        let t6 = mmul(a[6], b[0], mont);
+        let t7 = mmul(a[7], b[1], mont);
+
+        result[6] = madd(madd(madd(t0, t2, mont), t5, mont), t6, mont);
+        result[6] = madd(result[6], t7, mont);
+        result[6] = msub(msub(msub(result[6], t1, mont), t3, mont), t4, mont);
+
+        // e123 component (pseudoscalar)
+        let t0 = mmul(a[0], b[7], mont);
+        let t1 = mmul(a[1], b[6], mont);
+        let t2 = mmul(a[2], b[5], mont);
+        let t3 = mmul(a[3], b[4], mont);
+        let t4 = mmul(a[4], b[3], mont);
+        let t5 = mmul(a[5], b[2], mont);
+        let t6 = mmul(a[6], b[1], mont);
+        let t7 = mmul(a[7], b[0], mont);
+
+        result[7] = madd(madd(madd(madd(t0, t1, mont), t3, mont), t4, mont), t6, mont);
+        result[7] = madd(result[7], t7, mont);
+        result[7] = msub(msub(result[7], t2, mont), t5, mont);
+
+        Self::from_multivector(result)
     }
 
     /// Addition with lazy reduction (no immediate reduction)
@@ -899,4 +1044,46 @@ mod tests {
         assert_eq!(poly.coeffs[1].coeffs[0], 1);  // x^1 coefficient (from x^5)
         assert_eq!(poly.coeffs[2].coeffs[0], 1);  // x^2 coefficient
     }
+
+    #[test]
+    fn test_montgomery_geometric_product() {
+        use crate::montgomery::MontgomeryContext;
+
+        let mont = MontgomeryContext::new_clifford_lwe();
+
+        // Test case: (1 + 2e1) * (3 + 4e2) = 3 + 6e1 + 4e2 + 8e12
+        let a = CliffordRingElementInt::from_multivector([1, 2, 0, 0, 0, 0, 0, 0]);
+        let b = CliffordRingElementInt::from_multivector([3, 0, 4, 0, 0, 0, 0, 0]);
+
+        // Convert to Montgomery form
+        let mut a_mont = a.clone();
+        let mut b_mont = b.clone();
+        for i in 0..8 {
+            a_mont.coeffs[i] = mont.to_montgomery(a.coeffs[i]);
+            b_mont.coeffs[i] = mont.to_montgomery(b.coeffs[i]);
+        }
+
+        // Montgomery multiplication
+        let c_mont = a_mont.geometric_product_montgomery(&b_mont, &mont);
+
+        // Convert back from Montgomery form
+        let mut c = c_mont.clone();
+        for i in 0..8 {
+            c.coeffs[i] = mont.from_montgomery(c_mont.coeffs[i]);
+        }
+
+        // Expected: 3 + 6e1 + 4e2 + 8e12
+        assert_eq!(c.coeffs[0], 3, "scalar component");
+        assert_eq!(c.coeffs[1], 6, "e1 component");
+        assert_eq!(c.coeffs[2], 4, "e2 component");
+        assert_eq!(c.coeffs[4], 8, "e12 component");
+
+        // Verify matches standard multiplication
+        let c_standard = a.geometric_product(&b, mont.q);
+        for i in 0..8 {
+            assert_eq!(c.coeffs[i], c_standard.coeffs[i],
+                "Montgomery result should match standard at component {}", i);
+        }
+    }
 }
+
