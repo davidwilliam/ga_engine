@@ -22,6 +22,7 @@ blas-src = { version = "0.10", features = ["accelerate"] }
 rustfft = "6.1"
 rayon = "1.8"
 rand = "0.8"
+rand_distr = "0.4"  # For Gaussian distribution sampling (FHE)
 sha3 = "0.10"  # For SHAKE128/256 (deterministic RNG)
 
 [dev-dependencies]
