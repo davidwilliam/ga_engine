@@ -186,7 +186,8 @@ Kyber-512: 1,632 bytes
 2. **Concrete security estimation**:
    - Use lattice-estimator tool to compute bit security for (N=32, q=3329, k=8)
    - Compare to Kyber-512's security level
-   - **Status**: Not yet done (IMPORTANT GAP)
+   - **Status**: ⚠️ **ESTIMATED ~80-100 bits** (lattice-estimator unavailable, manual estimation inconclusive)
+   - **See**: `security_analysis/SECURITY_ANALYSIS.md` for full analysis
 
 3. **IND-CPA proof**:
    - Prove ciphertext is indistinguishable from uniform
@@ -235,7 +236,7 @@ Kyber-512: 1,632 bytes
 
 | Requirement | Status | Effort | Priority |
 |-------------|--------|--------|----------|
-| **Concrete security estimate** | ⚠️ Missing | 1 day | **HIGH** |
+| **Concrete security estimate** | ⚠️ Estimated ~80-100 bits | 1 day | **HIGH** |
 | **Formal IND-CPA proof** | ⚠️ Partial | 2-3 days | **HIGH** |
 | **Error bound analysis** | ⚠️ Informal only | 1-2 days | **MEDIUM** |
 | **Peer review feedback** | ⚠️ Not started | Ongoing | **MEDIUM** |
@@ -275,7 +276,7 @@ print(f"Security level: {result}")
 
 **Effort**: 1-2 hours (install tool + run analysis)
 
-**Status**: ⚠️ **NOT DONE - BLOCKING FOR PUBLICATION**
+**Status**: ⚠️ **ESTIMATED ~80-100 bits** (formal lattice-estimator analysis pending, see `security_analysis/SECURITY_ANALYSIS.md`)
 
 #### 2. Formal IND-CPA Security Proof 🔴
 
