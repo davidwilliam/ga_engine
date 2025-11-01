@@ -52,6 +52,7 @@ pub mod geometric_product;
 pub mod keys;
 pub mod operations;
 pub mod params;
+pub mod slot_encoding;
 
 // Re-exports
 pub use ckks::{decrypt, encrypt, multiply_by_plaintext, rotate, Ciphertext, Plaintext};
