@@ -133,11 +133,13 @@ pub fn keygen_with_rotation(
     let evk = generate_evaluation_key(&sk, params);
 
     // Generate rotation keys for SIMD slot operations
-    // For geometric product on Cl(3,0) with 8 components in slots 0-7:
-    // - Need to extract/place values at slots 0-7
-    // - Requires rotations: -7, -6, ..., -1, 0, 1, ..., 6, 7
-    // This allows moving any slot to position 0 and back
-    let rotation_amounts: Vec<isize> = (-7..=7).collect();
+    // For CKKS with N=params.n/2 slots using orbit-order indexing:
+    // - Need comprehensive rotations for geometric product operations
+    // - Geometric product requires component extraction/permutation
+    // - Generate keys for all useful rotations: -(N-1) to (N-1)
+    // This ensures we can perform any required slot manipulation
+    let num_slots = (params.n / 2) as isize;
+    let rotation_amounts: Vec<isize> = (-(num_slots - 1)..=num_slots - 1).collect();
     let rotk = generate_rotation_keys(&sk, &rotation_amounts, params);
 
     (pk, sk, evk, rotk)

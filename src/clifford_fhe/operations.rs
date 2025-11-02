@@ -6,6 +6,7 @@
 //!
 //! IMPORTANT: This uses rotation keys, not component extraction!
 
+use crate::clifford_fhe::canonical_embedding::encode_multivector_canonical;
 use crate::clifford_fhe::ckks::{multiply, multiply_by_plaintext, rotate, Ciphertext, Plaintext};
 use crate::clifford_fhe::keys::{EvaluationKey, RotationKey, PublicKey, SecretKey};
 use crate::clifford_fhe::params::CliffordFHEParams;
@@ -44,14 +45,17 @@ pub fn compute_component_product(
 ) -> Ciphertext {
     assert!(i < 8 && j < 8 && target_position < 8, "Invalid component index");
 
-    // Create selector polynomials (1 at position i or j, 0 elsewhere)
-    let mut selector_i = vec![0i64; params.n];
-    selector_i[i] = params.scale as i64;
-    let pt_i = Plaintext::new(selector_i, params.scale);
+    // Create selector multivectors (1 at slot i or j, 0 elsewhere)
+    // Must encode properly using canonical embedding!
+    let mut selector_mv_i = [0.0; 8];
+    selector_mv_i[i] = 1.0;
+    let selector_coeffs_i = encode_multivector_canonical(&selector_mv_i, params.scale, params.n);
+    let pt_i = Plaintext::new(selector_coeffs_i, params.scale);
 
-    let mut selector_j = vec![0i64; params.n];
-    selector_j[j] = params.scale as i64;
-    let pt_j = Plaintext::new(selector_j, params.scale);
+    let mut selector_mv_j = [0.0; 8];
+    selector_mv_j[j] = 1.0;
+    let selector_coeffs_j = encode_multivector_canonical(&selector_mv_j, params.scale, params.n);
+    let pt_j = Plaintext::new(selector_coeffs_j, params.scale);
 
     // Mask ct_a to select component i
     let ct_a_masked = multiply_by_plaintext(ct_a, &pt_i, params);
@@ -120,14 +124,17 @@ pub fn compute_component_product_simple(
 ) -> Ciphertext {
     assert!(i < 8 && j < 8 && target_position < 8, "Invalid component index");
 
-    // Create selector polynomials (1 at position i or j, 0 elsewhere)
-    let mut selector_i = vec![0i64; params.n];
-    selector_i[i] = params.scale as i64;
-    let pt_i = Plaintext::new(selector_i, params.scale);
+    // Create selector multivectors (1 at slot i or j, 0 elsewhere)
+    // Must encode properly using canonical embedding!
+    let mut selector_mv_i = [0.0; 8];
+    selector_mv_i[i] = 1.0;
+    let selector_coeffs_i = encode_multivector_canonical(&selector_mv_i, params.scale, params.n);
+    let pt_i = Plaintext::new(selector_coeffs_i, params.scale);
 
-    let mut selector_j = vec![0i64; params.n];
-    selector_j[j] = params.scale as i64;
-    let pt_j = Plaintext::new(selector_j, params.scale);
+    let mut selector_mv_j = [0.0; 8];
+    selector_mv_j[j] = 1.0;
+    let selector_coeffs_j = encode_multivector_canonical(&selector_mv_j, params.scale, params.n);
+    let pt_j = Plaintext::new(selector_coeffs_j, params.scale);
 
     // Mask ct_a to select component i
     let ct_a_masked = multiply_by_plaintext(ct_a, &pt_i, params);
@@ -192,7 +199,7 @@ pub fn negate(ct: &Ciphertext, params: &CliffordFHEParams) -> Ciphertext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::clifford_fhe::encoding::{decode_multivector, encode_multivector};
+    use crate::clifford_fhe::canonical_embedding::{decode_multivector_canonical, encode_multivector_canonical};
     use crate::clifford_fhe::keys::keygen_with_rotation;
     use crate::clifford_fhe::ckks::{encrypt, decrypt};
 
@@ -203,7 +210,7 @@ mod tests {
 
         // Create multivector [1, 2, 3, 4, 5, 6, 7, 8]
         let mv = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-        let pt_coeffs = encode_multivector(&mv, params.scale, params.n);
+        let pt_coeffs = encode_multivector_canonical(&mv, params.scale, params.n);
         let pt = Plaintext::new(pt_coeffs, params.scale);
         let ct = encrypt(&pk, &pt, &params);
 
@@ -212,7 +219,7 @@ mod tests {
 
         // Decrypt and check
         let pt_neg = decrypt(&sk, &ct_neg, &params);
-        let mv_neg = decode_multivector(&pt_neg.coeffs, params.scale);
+        let mv_neg = decode_multivector_canonical(&pt_neg.coeffs, params.scale, params.n);
 
         // Check negation worked (within error tolerance)
         for i in 0..8 {

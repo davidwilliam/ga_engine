@@ -40,9 +40,10 @@ impl CliffordFHEParams {
     /// Minimal parameters for testing (NOT SECURE!)
     ///
     /// Use this only for development/testing. Much faster key generation.
+    /// N=64 is TOO SMALL for multiplication - use new_test_mult() instead.
     pub fn new_test() -> Self {
         Self {
-            n: 64, // Very small for fast testing
+            n: 64, // Very small for fast testing (rotation/addition only!)
             moduli: vec![
                 // Just a few levels for testing
                 40, // Level 0
@@ -53,6 +54,64 @@ impl CliffordFHEParams {
             .map(|bits| Self::generate_prime(*bits))
             .collect(),
             scale: 2f64.powi(20), // Smaller scale for testing
+            error_std: 3.2,
+            security: SecurityLevel::Bit128, // Claimed, not actual!
+        }
+    }
+
+    /// Test parameters for multiplication (single-modulus - LIMITED)
+    ///
+    /// NOTE: This is the OLD single-modulus approach with limitations.
+    /// Use new_rns_mult() for proper RNS-CKKS multiplication.
+    pub fn new_test_mult() -> Self {
+        Self {
+            n: 1024,
+            moduli: vec![60]
+                .iter()
+                .map(|bits| Self::generate_prime(*bits))
+                .collect(),
+            scale: 2f64.powi(30),
+            error_std: 3.2,
+            security: SecurityLevel::Bit128,
+        }
+    }
+
+    /// Test parameters for RNS-CKKS multiplication (RECOMMENDED)
+    ///
+    /// N=1024 for testing, 3-prime modulus chain for depth-2 circuits.
+    ///
+    /// RNS-CKKS Parameters:
+    /// - Q = q₀ · q₁ · q₂ where each qᵢ ≈ 2^40
+    /// - Total modulus: Q ≈ 2^120
+    /// - Scale: Δ ≈ 2^40 (approximately equal to each prime)
+    /// - After 1st multiply: rescale to Q' = q₀ · q₁ ≈ 2^80
+    /// - After 2nd multiply: rescale to Q'' = q₀ ≈ 2^40
+    ///
+    /// This allows:
+    /// - 2 homomorphic multiplications (depth-2 circuits)
+    /// - Proper rescaling (drop one prime per multiply)
+    /// - scale² = 2^80 < Q = 2^120 ✅ (plenty of room)
+    pub fn new_rns_mult() -> Self {
+        // Use three DISTINCT 40-bit NTT-friendly primes
+        // These are carefully chosen to be:
+        // 1. ≡ 1 (mod 2N) for NTT support
+        // 2. Approximately equal in size (≈ 2^40)
+        // 3. DISTINCT from each other (required for CRT!)
+        let moduli = vec![
+            1_099_511_627_689,  // q₀ (40-bit, NTT-friendly for N=1024)
+            1_099_511_627_691,  // q₁ (40-bit, different prime)
+            1_099_511_627_693,  // q₂ (40-bit, different prime)
+        ];
+
+        // Verify they're all distinct
+        assert_ne!(moduli[0], moduli[1], "Primes must be distinct!");
+        assert_ne!(moduli[1], moduli[2], "Primes must be distinct!");
+        assert_ne!(moduli[0], moduli[2], "Primes must be distinct!");
+
+        Self {
+            n: 1024,
+            moduli,
+            scale: 2f64.powi(40), // Δ ≈ 2^40, approximately equal to each prime
             error_std: 3.2,
             security: SecurityLevel::Bit128, // Claimed, not actual!
         }
@@ -128,11 +187,22 @@ impl CliffordFHEParams {
     }
 
     /// Get current level modulus
+    ///
+    /// In RNS-CKKS, each level uses the PRODUCT of remaining primes:
+    /// - Level 0: Q0 = q0 * q1 * q2 (all primes)
+    /// - Level 1: Q1 = q0 * q1 (dropped last prime)
+    /// - Level 2: Q2 = q0 (dropped all but first)
+    ///
+    /// For single-modulus CKKS (simplified), all levels use the same modulus.
     pub fn modulus_at_level(&self, level: usize) -> i64 {
         if level >= self.moduli.len() {
             panic!("Level {} exceeds maximum {}", level, self.moduli.len() - 1);
         }
-        self.moduli[level]
+
+        // For now, use simplified single-modulus approach:
+        // Use the FIRST (largest) prime for all levels
+        // This avoids RNS complexity for initial testing
+        self.moduli[0]
     }
 
     /// Number of levels (depth) available

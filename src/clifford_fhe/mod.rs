@@ -49,11 +49,13 @@
 pub mod automorphisms;
 pub mod canonical_embedding;
 pub mod ckks;
+pub mod ckks_rns; // RNS-CKKS (new implementation)
 pub mod encoding;
 pub mod geometric_product;
 pub mod keys;
 pub mod operations;
 pub mod params;
+pub mod rns; // RNS (Residue Number System) core
 pub mod simple_rotation;
 pub mod slot_encoding;
 pub mod slot_operations;

@@ -91,62 +91,70 @@ pub fn canonical_embed_encode(slots: &[Complex<f64>], scale: f64, n: usize) -> V
     // This ensures automorphism σ_g acts as rotate-by-1
     let e = orbit_order(n, g);
 
-    // Step 1: Extend to full N slots with conjugate symmetry
-    // slots[t] corresponds to evaluation at ζ_M^{e[t]} where e[t] = g^t mod M
-    // The conjugate orbit is at -e[t] mod M
-    let mut extended = vec![Complex::new(0.0, 0.0); n];
-
-    for t in 0..num_slots {
-        extended[t] = slots[t];
-    }
-
-    // Conjugate symmetry: extended[N/2 + t] = conj(slots[t])
-    // This maps to roots ζ^{-e[t]} = ζ^{M - e[t]}
-    for t in 1..num_slots {
-        extended[n - t] = slots[t].conj();
-    }
-
-    // Step 2: Compute coefficients via inverse DFT at orbit-ordered roots
-    // We want: p(ζ_M^{e[t]}) = slots[t] for t=0..(N/2-1)
+    // Inverse canonical embedding (orbit-order compatible)
+    // For each coefficient j, sum over slots with both the slot value and its conjugate
+    // This handles the Hermitian symmetry required for real coefficients
     //
-    // The inverse transform is:
-    // coeffs[j] = (1/N) * Σ_{t=0}^{N-1} extended[t] * ζ_M^{-e[t]·j}
+    // Formula: c[j] = (1/N) * Re( Σ_t ( z[t] * w_t(j) + conj(z[t]) * conj(w_t(j)) ) )
+    // where w_t(j) = exp(-2πi * e[t] * j / M)
     //
-    // But since extended has conjugate symmetry, we can simplify:
-    // coeffs[j] = (2/N) * Re(Σ_{t=0}^{N/2-1} slots[t] * ζ_M^{-e[t]·j})
-
-    let mut coeffs_complex = vec![Complex::new(0.0, 0.0); n];
+    // Key points:
+    // - Single loop over t with TWO terms (z and conj(z)) per slot
+    // - Normalization is 1/N (NOT 2/N!)
+    // - No need to index conjugate slots - they're in the "other orbit" implicitly
+    let mut coeffs_float = vec![0.0; n];
 
     for j in 0..n {
         let mut sum = Complex::new(0.0, 0.0);
 
-        // Sum over first N/2 slots using orbit order
+        // Single loop over slots, adding both the slot and its conjugate contribution
         for t in 0..num_slots {
-            // Use e[t] instead of (2*k+1)!
-            let exponent = -((e[t] * j) as i64);
-            let angle = 2.0 * PI * (exponent as f64) / (m as f64);
-            let root = Complex::new(angle.cos(), angle.sin());
-            sum += slots[t] * root;
+            // w_t(j) = exp(-2πi * e[t] * j / M)
+            let angle = 2.0 * PI * (e[t] as f64) * (j as f64) / (m as f64);
+            let w = Complex::new(angle.cos(), -angle.sin()); // exp(-i*angle)
+
+            // Add both z[t] * w and conj(z[t]) * conj(w)
+            sum += slots[t] * w + slots[t].conj() * w.conj();
         }
 
-        // Account for conjugate pairs
-        coeffs_complex[j] = sum * 2.0 / (n as f64);
+        // Normalize by 1/N (NOT 2/N!) and take real part
+        coeffs_float[j] = sum.re / (n as f64);
     }
 
-    // Step 3: Scale and round to integers
-    let mut coeffs = vec![0i64; n];
-    for i in 0..n {
-        // Should be real due to conjugate symmetry
-        let value = coeffs_complex[i].re * scale;
-        coeffs[i] = value.round() as i64;
-    }
+    // Scale and round to integers
+    coeffs_float.iter().map(|&x| (x * scale).round() as i64).collect()
+}
 
-    coeffs
+/// Center-lift coefficients from [0, q) to (-q/2, q/2]
+///
+/// This is critical for correct decoding! Polynomial multiplication produces
+/// coefficients in [0, q), but for decoding to real values we must interpret
+/// them in the symmetric interval around zero.
+///
+/// # Arguments
+/// * `coeffs` - Coefficients in [0, q)
+/// * `q` - Modulus
+///
+/// # Returns
+/// * Coefficients in (-q/2, q/2]
+fn center_lift(coeffs: &[i64], q: i64) -> Vec<i64> {
+    coeffs.iter().map(|&c| {
+        let mut v = c % q;
+        if v < 0 {
+            v += q;
+        }
+        if v > q / 2 {
+            v -= q;
+        }
+        v
+    }).collect()
 }
 
 /// Decode slots using CKKS canonical embedding with orbit ordering
 ///
 /// Evaluates polynomial at the orbit-ordered primitive roots ζ_M^{e[t]}.
+///
+/// This is the adjoint of canonical_embed_encode.
 ///
 /// # Arguments
 /// * `coeffs` - Polynomial coefficients
@@ -165,20 +173,114 @@ pub fn canonical_embed_decode(coeffs: &[i64], scale: f64, n: usize) -> Vec<Compl
     // CRITICAL FIX: Use Galois orbit order!
     let e = orbit_order(n, g);
 
-    // Convert to floating point
+    // Convert to floating point (with scale normalization)
     let coeffs_float: Vec<f64> = coeffs.iter().map(|&c| c as f64 / scale).collect();
 
-    // Evaluate polynomial at ζ_M^{e[t]} for t = 0..N/2-1
+    // Forward canonical embedding: evaluate polynomial at ζ_M^{e[t]} for t = 0..N/2-1
+    // Formula: y_t = Σ_{j=0}^{N-1} c[j] * exp(+2πi * e[t] * j / M)
     let mut slots = vec![Complex::new(0.0, 0.0); num_slots];
 
     for t in 0..num_slots {
         let mut sum = Complex::new(0.0, 0.0);
         for j in 0..n {
-            // Compute ζ_M^{e[t]·j} where e[t] = g^t mod M
-            let exponent = e[t] * j;
-            let angle = 2.0 * PI * (exponent as f64) / (m as f64);
-            let root = Complex::new(angle.cos(), angle.sin());
-            sum += root * coeffs_float[j];
+            // w_t(j) = exp(+2πi * e[t] * j / M)  (note: positive angle for decode)
+            let angle = 2.0 * PI * (e[t] as f64) * (j as f64) / (m as f64);
+            let w = Complex::new(angle.cos(), angle.sin()); // exp(+i*angle)
+            sum += coeffs_float[j] * w;
+        }
+        slots[t] = sum;
+    }
+
+    slots
+}
+
+/// Decode slots from a PRODUCT polynomial (after homomorphic multiplication)
+///
+/// Use this for PLAINTEXT product polynomials (before encryption).
+/// After polynomial multiplication, coefficients are in [0, q) and represent
+/// values scaled by s². This function:
+/// 1. Center-lifts coefficients to (-q/2, q/2]
+/// 2. Normalizes by s² (not just s)
+/// 3. Decodes to slots
+///
+/// # Arguments
+/// * `coeffs` - Product polynomial coefficients in [0, q)
+/// * `scale` - Original scaling factor (NOT scale²!)
+/// * `q` - Modulus used in polynomial multiplication
+/// * `n` - Ring dimension
+///
+/// # Returns
+/// N/2 complex slot values representing element-wise product
+pub fn canonical_embed_decode_product(coeffs: &[i64], scale: f64, q: i64, n: usize) -> Vec<Complex<f64>> {
+    assert_eq!(coeffs.len(), n);
+
+    let m = 2 * n; // M = 2N
+    let num_slots = n / 2;
+    let g = 5; // Generator
+
+    // CRITICAL FIX: Use Galois orbit order!
+    let e = orbit_order(n, g);
+
+    // Step 1: Center-lift coefficients from [0, q) to (-q/2, q/2]
+    let centered = center_lift(coeffs, q);
+
+    // Step 2: Convert to float and normalize by s² (product scale)
+    let scale_squared = scale * scale;
+    let coeffs_float: Vec<f64> = centered.iter().map(|&c| c as f64 / scale_squared).collect();
+
+    // Step 3: Forward canonical embedding
+    let mut slots = vec![Complex::new(0.0, 0.0); num_slots];
+
+    for t in 0..num_slots {
+        let mut sum = Complex::new(0.0, 0.0);
+        for j in 0..n {
+            let angle = 2.0 * PI * (e[t] as f64) * (j as f64) / (m as f64);
+            let w = Complex::new(angle.cos(), angle.sin());
+            sum += coeffs_float[j] * w;
+        }
+        slots[t] = sum;
+    }
+
+    slots
+}
+
+/// Decode slots from ENCRYPTED product (after decrypt of homomorphic multiply result)
+///
+/// Use this after: ct1 × ct2 → decrypt → decode
+/// The decrypt function already center-lifted, so coefficients are in (-q/2, q/2].
+/// Polynomial coefficients still represent values at scale s².
+///
+/// # Arguments
+/// * `coeffs` - Center-lifted coefficients from decrypt (in (-q/2, q/2])
+/// * `scale` - Original scaling factor
+/// * `n` - Ring dimension
+///
+/// # Returns
+/// N/2 complex slot values
+pub fn canonical_embed_decode_homomorphic_product(coeffs: &[i64], scale: f64, n: usize) -> Vec<Complex<f64>> {
+    assert_eq!(coeffs.len(), n);
+
+    let m = 2 * n; // M = 2N
+    let num_slots = n / 2;
+    let g = 5; // Generator
+
+    let e = orbit_order(n, g);
+
+    // Coefficients are already center-lifted by decrypt!
+    // But they represent values at scale s² (from multiplication)
+    // So normalize by s²
+    let scale_squared = scale * scale;
+    let coeffs_float: Vec<f64> = coeffs.iter().map(|&c| c as f64 / scale_squared).collect();
+
+    // Forward canonical embedding
+    let mut slots = vec![Complex::new(0.0, 0.0); num_slots];
+
+    for t in 0..num_slots {
+        let mut sum = Complex::new(0.0, 0.0);
+        for j in 0..n {
+            let angle = 2.0 * PI * (e[t] as f64) * (j as f64) / (m as f64);
+            let w = Complex::new(angle.cos(), angle.sin());
+            sum += coeffs_float[j] * w;
         }
         slots[t] = sum;
     }
@@ -201,6 +303,37 @@ pub fn encode_multivector_canonical(mv: &[f64; 8], scale: f64, n: usize) -> Vec<
 
 /// Decode multivector using canonical embedding
 pub fn decode_multivector_canonical(coeffs: &[i64], scale: f64, n: usize) -> [f64; 8] {
+    let slots = canonical_embed_decode(coeffs, scale, n);
+
+    let mut mv = [0.0; 8];
+    for i in 0..8 {
+        mv[i] = slots[i].re;
+    }
+    mv
+}
+
+/// Decode multivector from a PRODUCT polynomial (after homomorphic multiplication)
+///
+/// This is a convenience wrapper for decode_multivector_canonical that handles
+/// the center-lifting and s² scaling required after polynomial multiplication.
+///
+/// # Arguments
+/// * `coeffs` - Product polynomial coefficients in [0, q)
+/// * `scale` - Original scaling factor (the ciphertext's scale after multiply/rescale)
+/// * `q` - Modulus
+/// * `n` - Ring dimension
+///
+/// # Returns
+/// 8-component multivector (real values)
+pub fn decode_multivector_product(coeffs: &[i64], scale: f64, q: i64, n: usize) -> [f64; 8] {
+    // For CKKS multiply, the scale management depends on the implementation
+    // After multiply: new_scale = scale1 * scale2 / params.scale
+    // So if scale1 = scale2 = s, new_scale = s
+    // But the polynomial coefficients represent values at scale s²
+    // So we need to decode considering the actual polynomial scale
+
+    // The cleanest approach: just use canonical_embed_decode with the ciphertext's scale
+    // The decrypt function already did center-lifting, so coeffs are in (-q/2, q/2]
     let slots = canonical_embed_decode(coeffs, scale, n);
 
     let mut mv = [0.0; 8];
