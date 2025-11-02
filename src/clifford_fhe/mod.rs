@@ -51,6 +51,7 @@ pub mod canonical_embedding;
 pub mod ckks;
 pub mod ckks_rns; // RNS-CKKS (new implementation)
 pub mod encoding;
+pub mod geometric_nn; // Geometric Deep Learning with FHE
 pub mod geometric_product;
 pub mod geometric_product_rns; // RNS geometric product (new!)
 pub mod keys;
