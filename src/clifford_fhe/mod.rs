@@ -52,6 +52,7 @@ pub mod ckks;
 pub mod ckks_rns; // RNS-CKKS (new implementation)
 pub mod encoding;
 pub mod geometric_product;
+pub mod geometric_product_rns; // RNS geometric product (new!)
 pub mod keys;
 pub mod keys_rns; // RNS-aware key generation
 pub mod operations;
