@@ -30,11 +30,11 @@
 //! Output (encrypted predictions)
 //! ```
 
-use crate::clifford_fhe::ckks_rns::{RnsCiphertext, RnsPlaintext, rns_encrypt};
-use crate::clifford_fhe::keys_rns::{RnsEvaluationKey, RnsPublicKey};
-use crate::clifford_fhe::params::CliffordFHEParams;
-use crate::clifford_fhe::geometric_product_rns::geometric_product_3d_componentwise;
-use crate::clifford_fhe::rns::rns_add;
+use crate::clifford_fhe_v1::ckks_rns::{RnsCiphertext, RnsPlaintext, rns_encrypt};
+use crate::clifford_fhe_v1::keys_rns::{RnsEvaluationKey, RnsPublicKey};
+use crate::clifford_fhe_v1::params::CliffordFHEParams;
+use crate::clifford_fhe_v1::geometric_product_rns::geometric_product_3d_componentwise;
+use crate::clifford_fhe_v1::rns::rns_add;
 
 /// Geometric Linear Layer for 3D multivectors
 ///
@@ -166,7 +166,7 @@ impl GeometricLinearLayer3D {
                 let sum_c0 = rns_add(&result_ct[j].c0, &bias_ct.c0, primes);
                 let sum_c1 = rns_add(&result_ct[j].c1, &bias_ct.c1, primes);
 
-                use crate::clifford_fhe::ckks_rns::RnsCiphertext as RCT;
+                use crate::clifford_fhe_v1::ckks_rns::RnsCiphertext as RCT;
                 result_ct[j] = RCT::new(sum_c0, sum_c1, result_ct[j].level, result_ct[j].scale);
             }
 

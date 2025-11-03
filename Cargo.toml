@@ -5,12 +5,27 @@ edition = "2021"
 build = "build.rs"
 
 [features]
-# by default we use f64
-default = ["f64", "nd"]
+# by default we use f64 and V1 (stable baseline)
+default = ["f64", "nd", "v1"]
 
 f32 = []     # compile everything under `nd` with f32
 f64 = []     # compile everything under `nd` with f64
 nd  = []
+
+# === Clifford FHE Version Selection ===
+# V1: Baseline reference implementation (stable, complete, well-tested)
+# V2: Optimized implementation (active development, performance-focused)
+v1 = []      # Baseline reference (default, stable)
+v2 = []      # Optimized version (active development)
+
+# === V2 Backend Selection (only active when v2 is enabled) ===
+v2-cpu-optimized = ["v2"]     # NTT + SIMD, no GPU (10-20× speedup)
+v2-gpu-cuda = ["v2"]          # CUDA backend (50-100× speedup, requires NVIDIA GPU)
+v2-gpu-metal = ["v2"]         # Metal backend (30-50× speedup, requires Apple Silicon)
+v2-simd-batched = ["v2"]      # SIMD slot packing (8-16× throughput)
+
+# Combined: all V2 optimizations
+v2-full = ["v2", "v2-cpu-optimized", "v2-gpu-cuda", "v2-simd-batched"]
 
 [dependencies]
 serde           = { version = "1.0", features = ["derive"] }

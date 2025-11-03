@@ -28,7 +28,21 @@
 
 // Core modules
 pub mod bivector;
-pub mod clifford_fhe;  // Clifford-FHE: FULLY homomorphic encryption for geometric algebra
+
+// Clifford FHE: Version selection via feature flags
+#[cfg(feature = "v1")]
+pub mod clifford_fhe_v1;  // V1: Baseline reference (stable, complete)
+
+#[cfg(feature = "v2")]
+pub mod clifford_fhe_v2;  // V2: Optimized implementation (active development)
+
+// Default export: V1 unless V2 is explicitly requested
+#[cfg(all(feature = "v1", not(feature = "v2")))]
+pub use clifford_fhe_v1 as clifford_fhe;
+
+#[cfg(feature = "v2")]
+pub use clifford_fhe_v2 as clifford_fhe;
+
 pub mod ga;
 pub mod multivector;
 pub mod ops;

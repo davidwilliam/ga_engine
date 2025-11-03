@@ -364,7 +364,7 @@ mod tests {
 
     #[test]
     fn test_automorphism_rotates_slots() {
-        use crate::clifford_fhe::automorphisms::apply_automorphism;
+        use crate::clifford_fhe_v1::automorphisms::apply_automorphism;
 
         let n = 32;
         let scale = 1u64 << 40;

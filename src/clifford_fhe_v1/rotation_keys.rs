@@ -16,10 +16,10 @@
 //!
 //! Expected speedup: 2-3x for rotation operations
 
-use crate::clifford_fhe::ckks_rns::RnsCiphertext;
-use crate::clifford_fhe::keys_rns::{RnsSecretKey, RnsPublicKey};
-use crate::clifford_fhe::params::CliffordFHEParams;
-use crate::clifford_fhe::rns::RnsPolynomial;
+use crate::clifford_fhe_v1::ckks_rns::RnsCiphertext;
+use crate::clifford_fhe_v1::keys_rns::{RnsSecretKey, RnsPublicKey};
+use crate::clifford_fhe_v1::params::CliffordFHEParams;
+use crate::clifford_fhe_v1::rns::RnsPolynomial;
 
 /// Rotation key for Clifford FHE
 ///

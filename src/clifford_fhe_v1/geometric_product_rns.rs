@@ -12,10 +12,10 @@
 //!
 //! where ⊗ is the geometric product, not just polynomial multiplication!
 
-use crate::clifford_fhe::ckks_rns::{RnsCiphertext, rns_multiply_ciphertexts};
-use crate::clifford_fhe::keys_rns::RnsEvaluationKey;
-use crate::clifford_fhe::params::CliffordFHEParams;
-use crate::clifford_fhe::rns::{rns_add, rns_sub};
+use crate::clifford_fhe_v1::ckks_rns::{RnsCiphertext, rns_multiply_ciphertexts};
+use crate::clifford_fhe_v1::keys_rns::RnsEvaluationKey;
+use crate::clifford_fhe_v1::params::CliffordFHEParams;
+use crate::clifford_fhe_v1::rns::{rns_add, rns_sub};
 
 /// 2D Geometric Algebra Cl(2,0) structure constants
 ///
@@ -553,7 +553,7 @@ fn negate_ciphertext(ct: &RnsCiphertext, primes: &[i64], n: usize) -> RnsCiphert
         }
     }
 
-    use crate::clifford_fhe::rns::RnsPolynomial;
+    use crate::clifford_fhe_v1::rns::RnsPolynomial;
     let neg_c0 = RnsPolynomial::new(neg_c0_coeffs, n, ct.c0.level);
     let neg_c1 = RnsPolynomial::new(neg_c1_coeffs, n, ct.c1.level);
 
@@ -742,7 +742,7 @@ pub fn reverse_3d(ct: &[RnsCiphertext; 8], params: &CliffordFHEParams) -> [RnsCi
 /// This is needed when we need to match levels between ciphertexts for multiplication.
 /// After multiplication, result is at level+1. To multiply again, we need operands at same level.
 fn modswitch_to_next_level(ct: &RnsCiphertext, params: &CliffordFHEParams) -> RnsCiphertext {
-    use crate::clifford_fhe::rns::{RnsPolynomial, Domain};
+    use crate::clifford_fhe_v1::rns::{RnsPolynomial, Domain};
 
     // Drop the last prime to advance level
     let new_level = ct.level + 1;

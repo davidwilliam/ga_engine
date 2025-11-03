@@ -3,8 +3,8 @@
 //! This module provides key structures and generation functions that work
 //! with RNS (Residue Number System) representation, enabling multi-prime CKKS.
 
-use crate::clifford_fhe::params::CliffordFHEParams;
-use crate::clifford_fhe::rns::{RnsPolynomial, rns_add, rns_multiply as rns_poly_multiply};
+use crate::clifford_fhe_v1::params::CliffordFHEParams;
+use crate::clifford_fhe_v1::rns::{RnsPolynomial, rns_add, rns_multiply as rns_poly_multiply};
 use rand::{thread_rng, Rng};
 use rand_distr::{Distribution, Normal};
 
@@ -108,7 +108,7 @@ pub fn rns_keygen(params: &CliffordFHEParams) -> (RnsPublicKey, RnsSecretKey, Rn
 
     // 4. Compute b = a*s + e (in RNS)
     // Use NTT-based polynomial multiplication (imported from ckks_rns module)
-    use crate::clifford_fhe::ckks_rns::polynomial_multiply_ntt;
+    use crate::clifford_fhe_v1::ckks_rns::polynomial_multiply_ntt;
 
     // DEBUG: Check inputs to multiplication
     if std::env::var("RNS_TRACE").is_ok() && num_primes == 2 {
@@ -218,7 +218,7 @@ fn generate_rns_evaluation_key(
               num_primes, q_bits, w, d);
 
     // Use NTT-based polynomial multiplication (imported from ckks_rns module)
-    use crate::clifford_fhe::ckks_rns::polynomial_multiply_ntt;
+    use crate::clifford_fhe_v1::ckks_rns::polynomial_multiply_ntt;
 
     // Compute s²
     let s_squared = rns_poly_multiply(sk, sk, primes, polynomial_multiply_ntt);
@@ -302,7 +302,7 @@ pub fn rns_generate_rotation_keys(
     rotations: &[isize],
     params: &CliffordFHEParams,
 ) -> RnsRotationKey {
-    use crate::clifford_fhe::automorphisms::rotation_to_automorphism;
+    use crate::clifford_fhe_v1::automorphisms::rotation_to_automorphism;
     use std::collections::HashMap;
 
     let mut keys = HashMap::new();

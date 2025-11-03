@@ -8,9 +8,9 @@
 //! - Rescaling drops a prime from the modulus chain
 //! - Supports larger effective moduli (Q = q₀ · q₁ · ... can be 2^200+)
 
-use crate::clifford_fhe::keys_rns::{RnsPublicKey, RnsSecretKey, RnsEvaluationKey};
-use crate::clifford_fhe::params::CliffordFHEParams;
-use crate::clifford_fhe::rns::{RnsPolynomial, rns_add, rns_sub, rns_multiply as rns_poly_multiply, rns_rescale_exact, precompute_rescale_inv, decompose_base_pow2};
+use crate::clifford_fhe_v1::keys_rns::{RnsPublicKey, RnsSecretKey, RnsEvaluationKey};
+use crate::clifford_fhe_v1::params::CliffordFHEParams;
+use crate::clifford_fhe_v1::rns::{RnsPolynomial, rns_add, rns_sub, rns_multiply as rns_poly_multiply, rns_rescale_exact, precompute_rescale_inv, decompose_base_pow2};
 
 // ============================================================================
 // NTT (Number Theoretic Transform) helpers for negacyclic convolution
