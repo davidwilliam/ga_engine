@@ -4,7 +4,7 @@
 //! with RNS (Residue Number System) representation, enabling multi-prime CKKS.
 
 use crate::clifford_fhe::params::CliffordFHEParams;
-use crate::clifford_fhe::rns::{RnsPolynomial, rns_add, rns_sub, rns_multiply as rns_poly_multiply};
+use crate::clifford_fhe::rns::{RnsPolynomial, rns_add, rns_multiply as rns_poly_multiply};
 use rand::{thread_rng, Rng};
 use rand_distr::{Distribution, Normal};
 
@@ -107,34 +107,8 @@ pub fn rns_keygen(params: &CliffordFHEParams) -> (RnsPublicKey, RnsSecretKey, Rn
     let e_rns = RnsPolynomial::from_coeffs(&e_coeffs, primes, n, 0);
 
     // 4. Compute b = a*s + e (in RNS)
-    let polynomial_multiply_ntt = |a: &[i64], b: &[i64], q: i64, n: usize| -> Vec<i64> {
-        // Temporary naive implementation with i128 to avoid overflow
-        let mut result = vec![0i128; n];
-        let q128 = q as i128;
-
-        for i in 0..n {
-            for j in 0..n {
-                let idx = i + j;
-                // Don't reduce modulo here - accumulate first
-                let prod = (a[i] as i128) * (b[j] as i128);
-                if idx < n {
-                    result[idx] += prod;
-                } else {
-                    // x^n = -1 reduction (negacyclic)
-                    let wrapped_idx = idx % n;
-                    result[wrapped_idx] -= prod;
-                }
-            }
-        }
-        result.iter().map(|&x| {
-            let r = x % q128;
-            if r < 0 {
-                (r + q128) as i64
-            } else {
-                r as i64
-            }
-        }).collect()
-    };
+    // Use NTT-based polynomial multiplication (imported from ckks_rns module)
+    use crate::clifford_fhe::ckks_rns::polynomial_multiply_ntt;
 
     // DEBUG: Check inputs to multiplication
     if std::env::var("RNS_TRACE").is_ok() && num_primes == 2 {
@@ -234,32 +208,8 @@ fn generate_rns_evaluation_key(
     let q_bits = (num_primes as u32) * 60;
     let d: usize = ((q_bits + w - 1) / w) as usize;
 
-    // Helper for polynomial multiplication
-    let polynomial_multiply_ntt = |a: &[i64], b: &[i64], q: i64, n: usize| -> Vec<i64> {
-        let mut result = vec![0i128; n];
-        let q128 = q as i128;
-        for i in 0..n {
-            for j in 0..n {
-                let idx = i + j;
-                // Don't reduce modulo here - accumulate first
-                let prod = (a[i] as i128) * (b[j] as i128);
-                if idx < n {
-                    result[idx] += prod;
-                } else {
-                    let wrapped_idx = idx % n;
-                    result[wrapped_idx] -= prod;
-                }
-            }
-        }
-        result.iter().map(|&x| {
-            let r = x % q128;
-            if r < 0 {
-                (r + q128) as i64
-            } else {
-                r as i64
-            }
-        }).collect()
-    };
+    // Use NTT-based polynomial multiplication (imported from ckks_rns module)
+    use crate::clifford_fhe::ckks_rns::polynomial_multiply_ntt;
 
     // Compute s²
     let s_squared = rns_poly_multiply(sk, sk, primes, polynomial_multiply_ntt);
@@ -312,7 +262,7 @@ fn generate_rns_evaluation_key(
         let neg_bt_s2_coeffs: Vec<Vec<i64>> = (0..n).map(|i| {
             (0..num_primes).map(|j| {
                 let q = primes[j];
-                ((q - bt_s2_coeffs[i][j] % q) % q)
+                (q - bt_s2_coeffs[i][j] % q) % q
             }).collect()
         }).collect();
         let neg_bt_s2 = RnsPolynomial::new(neg_bt_s2_coeffs, n, 0);

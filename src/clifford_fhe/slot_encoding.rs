@@ -25,7 +25,6 @@
 
 use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
-use std::sync::Arc;
 
 /// Encode multivector into SIMD slots
 ///

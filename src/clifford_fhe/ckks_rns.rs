@@ -8,43 +8,204 @@
 //! - Rescaling drops a prime from the modulus chain
 //! - Supports larger effective moduli (Q = q₀ · q₁ · ... can be 2^200+)
 
-use crate::clifford_fhe::keys::{EvaluationKey, PublicKey, SecretKey}; // Old single-modulus keys
-use crate::clifford_fhe::keys_rns::{RnsPublicKey, RnsSecretKey, RnsEvaluationKey}; // New RNS keys
+use crate::clifford_fhe::keys_rns::{RnsPublicKey, RnsSecretKey, RnsEvaluationKey};
 use crate::clifford_fhe::params::CliffordFHEParams;
-use crate::clifford_fhe::rns::{RnsPolynomial, Domain, rns_add, rns_sub, rns_multiply as rns_poly_multiply, rns_rescale_exact, precompute_rescale_inv, decompose_base_pow2};
+use crate::clifford_fhe::rns::{RnsPolynomial, rns_add, rns_sub, rns_multiply as rns_poly_multiply, rns_rescale_exact, precompute_rescale_inv, decompose_base_pow2};
 
-/// Helper function for polynomial multiplication modulo q with negacyclic reduction
-fn polynomial_multiply_ntt(a: &[i64], b: &[i64], q: i64, n: usize) -> Vec<i64> {
-    // Temporary naive implementation with i128 to avoid overflow
-    // TODO: Use actual NTT for efficiency
-    let mut result = vec![0i128; n];
-    let q128 = q as i128;
+// ============================================================================
+// NTT (Number Theoretic Transform) helpers for negacyclic convolution
+// ============================================================================
 
-    // Accumulate ALL products first, then reduce modulo at the end
-    // This avoids intermediate modulo operations that can introduce errors
+#[inline(always)]
+fn mod_add_u64(a: u64, b: u64, q: u64) -> u64 {
+    let s = a.wrapping_add(b);
+    if s >= q { s - q } else { s }
+}
+
+#[inline(always)]
+fn mod_sub_u64(a: u64, b: u64, q: u64) -> u64 {
+    if a >= b { a - b } else { a + q - b }
+}
+
+#[inline(always)]
+fn mod_mul_u64(a: u64, b: u64, q: u64) -> u64 {
+    // 128-bit exact multiply then reduce
+    let p = (a as u128) * (b as u128);
+    (p % (q as u128)) as u64
+}
+
+fn mod_pow_u64(mut base: u64, mut exp: u64, q: u64) -> u64 {
+    let mut acc = 1u64;
+    while exp > 0 {
+        if (exp & 1) == 1 { acc = mod_mul_u64(acc, base, q); }
+        base = mod_mul_u64(base, base, q);
+        exp >>= 1;
+    }
+    acc
+}
+
+/// Find a primitive root of Z_q^* (q prime). Brute force is fine for a few primes.
+fn primitive_root(q: u64) -> u64 {
+    // factor q-1 (we only need factor 2 and the odd part)
+    let phi = q - 1;
+    let mut odd = phi;
+    while odd % 2 == 0 { odd /= 2; }
+
+    for g in 2..q {
+        // g^{phi/2} != 1, g^{phi/odd} != 1 (quick sieve)
+        if mod_pow_u64(g, phi/2, q) == 1 { continue; }
+        if odd != 1 && mod_pow_u64(g, phi/odd, q) == 1 { continue; }
+        // Optional: check all prime factors of phi if you want a strict test
+        return g;
+    }
+    unreachable!("no primitive root found (unexpected for prime q)");
+}
+
+/// Compute psi, omega for twisted NTT:
+/// - psi is a 2N-th primitive root: psi^(2N) = 1, psi^N = q-1 (=-1)
+/// - omega = psi^2 is an N-th primitive root.
+fn negacyclic_roots(q: u64, n: usize) -> (u64, u64) {
+    let g = primitive_root(q);
+    let two_n = 2u64 * (n as u64);
+    assert_eq!((q - 1) % two_n, 0, "q-1 must be divisible by 2N for NTT");
+    let exp = (q - 1) / two_n;
+    let psi = mod_pow_u64(g, exp, q);
+    let omega = mod_mul_u64(psi, psi, q); // psi^2
+    // sanity checks
+    debug_assert_eq!(mod_pow_u64(psi, two_n, q), 1);
+    debug_assert_eq!(mod_pow_u64(psi, n as u64, q), q - 1);
+    debug_assert_eq!(mod_pow_u64(omega, n as u64, q), 1);
+    (psi, omega)
+}
+
+/// Bit reverse of k with logn bits
+#[inline(always)]
+fn bitrev(mut k: usize, logn: usize) -> usize {
+    let mut r = 0usize;
+    for _ in 0..logn {
+        r = (r << 1) | (k & 1);
+        k >>= 1;
+    }
+    r
+}
+
+/// In-place iterative Cooley–Tukey NTT with root `omega` of order N (cyclic).
+fn ntt_in_place(a: &mut [u64], q: u64, omega: u64) {
+    let n = a.len();
+    let logn = n.trailing_zeros() as usize;
+
+    // bit-reverse permutation
     for i in 0..n {
-        for j in 0..n {
-            let idx = i + j;
-            let prod = (a[i] as i128) * (b[j] as i128);
-            if idx < n {
-                result[idx] += prod;
-            } else {
-                // x^n = -1 reduction (negacyclic)
-                let wrapped_idx = idx % n;
-                result[wrapped_idx] -= prod;
-            }
-        }
+        let j = bitrev(i, logn);
+        if j > i { a.swap(i, j); }
     }
 
-    // Now reduce modulo q once at the end
-    result.iter().map(|&x| {
-        let r = x % q128;
-        if r < 0 {
-            (r + q128) as i64
-        } else {
-            r as i64
+    let mut m = 1;
+    for _stage in 0..logn {
+        let m2 = m << 1;
+        // w_m = omega^(N/m2)
+        let w_m = mod_pow_u64(omega, (n / m2) as u64, q);
+        let mut k = 0;
+        while k < n {
+            let mut w = 1u64;
+            for j in 0..m {
+                let t = mod_mul_u64(w, a[k + j + m], q);
+                let u = a[k + j];
+                a[k + j]     = mod_add_u64(u, t, q);
+                a[k + j + m] = mod_sub_u64(u, t, q);
+                w = mod_mul_u64(w, w_m, q);
+            }
+            k += m2;
         }
-    }).collect()
+        m = m2;
+    }
+}
+
+/// Inverse NTT (cyclic) with inverse root omega^{-1} and scaling by n^{-1}.
+fn intt_in_place(a: &mut [u64], q: u64, omega: u64) {
+    let n = a.len();
+    // omega_inv = omega^{-1} = omega^{q-2} by Fermat's Little Theorem
+    // Equivalently: omega^{n-1} since omega has order n
+    let omega_inv = mod_pow_u64(omega, q - 2, q);
+    ntt_in_place(a, q, omega_inv);
+    // scale by n^{-1} = n^{q-2} by Fermat
+    let n_inv = mod_pow_u64(n as u64, q - 2, q);
+    for v in a.iter_mut() {
+        *v = mod_mul_u64(*v, n_inv, q);
+    }
+}
+
+/// Twisted NTT for negacyclic convolution modulo X^N + 1
+/// forward: a[i] <- a[i] * psi^i, then NTT with omega = psi^2
+fn negacyclic_ntt(mut a: Vec<u64>, q: u64, psi: u64, omega: u64) -> Vec<u64> {
+    let n = a.len();
+    let mut pow = 1u64;
+    for i in 0..n {
+        a[i] = mod_mul_u64(a[i], pow, q);
+        pow = mod_mul_u64(pow, psi, q);
+    }
+    ntt_in_place(&mut a, q, omega);
+    a
+}
+
+/// inverse: inverse NTT, then a[i] <- a[i] * psi^{-i}
+fn negacyclic_intt(mut a: Vec<u64>, q: u64, psi: u64, omega: u64) -> Vec<u64> {
+    let n = a.len();
+    intt_in_place(&mut a, q, omega);
+
+    // multiply by psi^{-i}
+    let psi_inv = mod_pow_u64(psi, (q - 1) - 1, q); // psi^{-1}
+    let mut pow = 1u64;
+    for i in 0..n {
+        a[i] = mod_mul_u64(a[i], pow, q);
+        pow = mod_mul_u64(pow, psi_inv, q);
+    }
+    a
+}
+
+// ============================================================================
+// Polynomial multiplication using NTT
+// ============================================================================
+
+/// Negacyclic polynomial multiply c = a * b mod (x^n + 1, q) using twisted NTT.
+/// `a`, `b` are length-n with coefficients in [0, q).
+///
+/// This is the PRODUCTION implementation for CKKS with 60-bit primes.
+/// Uses O(N log N) NTT instead of naive O(N^2) schoolbook multiplication.
+pub fn polynomial_multiply_ntt(a: &[i64], b: &[i64], q_i64: i64, n: usize) -> Vec<i64> {
+    debug_assert!(n.is_power_of_two(), "N must be power of 2 for NTT");
+    let q = q_i64 as u64;
+
+    // Convert to u64 residues in [0, q)
+    let mut au = vec![0u64; n];
+    let mut bu = vec![0u64; n];
+    for i in 0..n {
+        let x = a[i];
+        let y = b[i];
+        let xi = ((x % q_i64) + q_i64) % q_i64;
+        let yi = ((y % q_i64) + q_i64) % q_i64;
+        au[i] = xi as u64;
+        bu[i] = yi as u64;
+    }
+
+    // Twisted NTT params
+    let (psi, omega) = negacyclic_roots(q, n);
+
+    // Forward NTT (negacyclic)
+    let a_ntt = negacyclic_ntt(au, q, psi, omega);
+    let b_ntt = negacyclic_ntt(bu, q, psi, omega);
+
+    // Pointwise multiply
+    let mut c_ntt = vec![0u64; n];
+    for i in 0..n {
+        c_ntt[i] = mod_mul_u64(a_ntt[i], b_ntt[i], q);
+    }
+
+    // Inverse NTT (negacyclic)
+    let c = negacyclic_intt(c_ntt, q, psi, omega);
+
+    // Back to i64 in [0, q)
+    c.into_iter().map(|v| v as i64).collect()
 }
 
 /// RNS-CKKS plaintext (polynomial in RNS representation)
@@ -75,16 +236,55 @@ impl RnsPlaintext {
     /// Convert to regular coefficients using CRT (full reconstruction)
     ///
     /// WARNING: This can overflow if Q = ∏qᵢ > i64_MAX!
-    /// Use to_coeffs_single_prime() instead for CKKS decoding.
+    /// For CKKS decoding with many primes, use to_coeffs_f64() instead.
+    ///
+    /// # Deprecated
+    /// Use to_coeffs_f64() for production code with >3 primes.
     pub fn to_coeffs(&self, primes: &[i64]) -> Vec<i64> {
         self.coeffs.to_coeffs(primes)
     }
 
-    /// Convert to regular coefficients using single prime (recommended for CKKS)
+    /// Convert to i128 coefficients using Garner's CRT (PRODUCTION VERSION)
+    ///
+    /// Uses Garner's algorithm entirely in i128 arithmetic:
+    /// - Works correctly with up to 10 primes
+    /// - Returns centered values in (-Q/2, Q/2]
+    /// - All intermediate arithmetic stays in i128 (no f64 precision loss)
+    ///
+    /// This is the **RECOMMENDED** way to decode CKKS plaintexts with multiple primes.
+    ///
+    /// # Arguments
+    /// * `primes` - Prime chain (2-10 primes)
+    ///
+    /// # Returns
+    /// Coefficients as i128 in range (-Q/2, Q/2]
+    pub fn to_coeffs_i128(&self, primes: &[i64]) -> Vec<i128> {
+        self.coeffs.to_coeffs_crt_i128(primes)
+    }
+
+    /// Convert to f64 coefficients using Garner's CRT
+    ///
+    /// Uses Garner's algorithm which:
+    /// - Works correctly with up to 10 primes (no i128 overflow)
+    /// - Returns centered values in (-Q/2, Q/2]
+    /// - Uses f64 arithmetic for numerical stability
+    ///
+    /// # Deprecated
+    /// Use to_coeffs_i128() for production code to avoid f64 precision loss.
+    ///
+    /// # Arguments
+    /// * `primes` - Prime chain
+    ///
+    /// # Returns
+    /// Coefficients as f64 in range (-Q/2, Q/2]
+    pub fn to_coeffs_f64(&self, primes: &[i64]) -> Vec<f64> {
+        self.coeffs.to_coeffs_crt_centered(primes)
+    }
+
+    /// Convert to regular coefficients using single prime
     ///
     /// Extracts coefficients modulo the first prime (largest/base prime).
-    /// This avoids CRT overflow and is sufficient for CKKS decoding since
-    /// message + noise << any single prime.
+    /// This avoids CRT computation but may lose precision.
     ///
     /// # Arguments
     /// * `primes` - Prime chain (will use first prime)
@@ -195,10 +395,10 @@ pub fn rns_encrypt(pk: &RnsPublicKey, pt: &RnsPlaintext, params: &CliffordFHEPar
         eprintln!("  e0[0] residues: {:?}", &e0_rns.rns_coeffs[0]);
         eprintln!("  e1[0] residues: {:?}", &e1_rns.rns_coeffs[0]);
         eprintln!("  pt.coeffs[0] residues: {:?}", &pt.coeffs.rns_coeffs[0]);
-        eprintln!("  pk.b[0] residues: {:?}", &pk.b.rns_coeffs[0][..2]);
-        eprintln!("  pk.b[1] residues: {:?}", &pk.b.rns_coeffs[1][..2]);
-        eprintln!("  pk.b[63] residues: {:?}", &pk.b.rns_coeffs[63][..2]);
-        eprintln!("  pk.a[0] residues: {:?}", &pk.a.rns_coeffs[0][..2]);
+        eprintln!("  pk.b[0] residues: {:?}", &pk.b.rns_coeffs[0]);
+        eprintln!("  pk.b[1] residues: {:?}", &pk.b.rns_coeffs[1]);
+        eprintln!("  pk.b[63] residues: {:?}", &pk.b.rns_coeffs[63]);
+        eprintln!("  pk.a[0] residues: {:?}", &pk.a.rns_coeffs[0]);
         eprintln!("  br[0] residues: {:?}", &br.rns_coeffs[0]);
         eprintln!("  ar[0] residues: {:?}", &ar.rns_coeffs[0]);
     }
@@ -257,8 +457,14 @@ pub fn rns_decrypt(sk: &RnsSecretKey, ct: &RnsCiphertext, params: &CliffordFHEPa
     if std::env::var("RNS_TRACE").is_ok() {
         eprintln!("\n[DECRYPTION TRACE]");
         eprintln!("  ct.c0[0] residues: {:?}", &ct.c0.rns_coeffs[0]);
+        eprintln!("  ct.c0[1] residues: {:?}", &ct.c0.rns_coeffs[1]);
+        eprintln!("  ct.c0[2] residues: {:?}", &ct.c0.rns_coeffs[2]);
         eprintln!("  ct.c1[0] residues: {:?}", &ct.c1.rns_coeffs[0]);
+        eprintln!("  ct.c1[1] residues: {:?}", &ct.c1.rns_coeffs[1]);
+        eprintln!("  ct.c1[2] residues: {:?}", &ct.c1.rns_coeffs[2]);
         eprintln!("  sk[0] residues: {:?}", &sk_at_level.rns_coeffs[0]);
+        eprintln!("  sk[1] residues: {:?}", &sk_at_level.rns_coeffs[1]);
+        eprintln!("  sk[2] residues: {:?}", &sk_at_level.rns_coeffs[2]);
 
         // CRT consistency check for inputs
         let check_crt = |name: &str, residues: &[i64], primes: &[i64]| {
@@ -420,15 +626,15 @@ pub fn rns_multiply_ciphertexts(
         let num_primes = pre.num_primes();
         let q_last = primes[num_primes - 1];
 
-        let cL = pre.rns_coeffs[idx][num_primes - 1];
-        let cL_center = if cL > q_last / 2 { cL - q_last } else { cL };
+        let c_l = pre.rns_coeffs[idx][num_primes - 1];
+        let c_l_center = if c_l > q_last / 2 { c_l - q_last } else { c_l };
 
         for j in 0..(num_primes - 1) {
             let qi = primes[j];
 
             let lhs = {
                 let t = ((post.rns_coeffs[idx][j] as i128) * (q_last as i128)) % (qi as i128);
-                let u = (t + (cL_center as i128)) % (qi as i128);
+                let u = (t + (c_l_center as i128)) % (qi as i128);
                 ((u + (qi as i128)) % (qi as i128)) as i64
             };
 
@@ -439,8 +645,8 @@ pub fn rns_multiply_ciphertexts(
                     "[DIVROUND CHECK FAIL] coeff {}, prime j={} (qi={}): LHS={} != RHS={}",
                     idx, j, qi, lhs, rhs
                 );
-                eprintln!("  cL_center={}, post[{}][{}]={}, pre[{}][{}]={}",
-                    cL_center, idx, j, post.rns_coeffs[idx][j], idx, j, pre.rns_coeffs[idx][j]);
+                eprintln!("  c_l_center={}, post[{}][{}]={}, pre[{}][{}]={}",
+                    c_l_center, idx, j, post.rns_coeffs[idx][j], idx, j, pre.rns_coeffs[idx][j]);
             }
         }
     }

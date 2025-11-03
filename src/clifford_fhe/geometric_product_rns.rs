@@ -12,8 +12,8 @@
 //!
 //! where ⊗ is the geometric product, not just polynomial multiplication!
 
-use crate::clifford_fhe::ckks_rns::{RnsCiphertext, RnsPlaintext, rns_multiply_ciphertexts, rns_decrypt};
-use crate::clifford_fhe::keys_rns::{RnsEvaluationKey, RnsSecretKey};
+use crate::clifford_fhe::ckks_rns::{RnsCiphertext, rns_multiply_ciphertexts};
+use crate::clifford_fhe::keys_rns::RnsEvaluationKey;
 use crate::clifford_fhe::params::CliffordFHEParams;
 use crate::clifford_fhe::rns::{rns_add, rns_sub};
 
@@ -299,7 +299,7 @@ pub fn geometric_product_2d(
     // Each component needs to accumulate multiple products
 
     // Storage for each output component's accumulator
-    let mut component_accumulators: Vec<Option<RnsCiphertext>> = vec![None; 4];
+    let component_accumulators: Vec<Option<RnsCiphertext>> = vec![None; 4];
 
     // For each output component
     for output_idx in 0..4 {
@@ -390,8 +390,8 @@ pub fn geometric_product_2d_componentwise(
                 for i in 0..params.n {
                     for j in 0..neg_c0.num_primes() {
                         let qi = active_primes[j];
-                        neg_c0.rns_coeffs[i][j] = ((qi - product.c0.rns_coeffs[i][j] % qi) % qi);
-                        neg_c1.rns_coeffs[i][j] = ((qi - product.c1.rns_coeffs[i][j] % qi) % qi);
+                        neg_c0.rns_coeffs[i][j] = (qi - product.c0.rns_coeffs[i][j] % qi) % qi;
+                        neg_c1.rns_coeffs[i][j] = (qi - product.c1.rns_coeffs[i][j] % qi) % qi;
                     }
                 }
 

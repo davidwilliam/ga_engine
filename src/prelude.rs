@@ -12,10 +12,5 @@ pub use crate::multivector::Multivector3;
 pub use crate::rotor::Rotor3;
 pub use crate::vector::{Rounded, Vec3};
 
-// classical ↔ GA kernels
-pub use crate::classical::multiply_matrices;
+// GA operations
 pub use crate::ga::{geometric_product, geometric_product_full};
-pub use crate::transform::apply_matrix3;
-
-// specialized numerical types
-pub use crate::numerical_checks::multivector2::Multivector2;

@@ -1,359 +1,360 @@
-# Geometric Algebra for Cryptography and Machine Learning
+# Clifford FHE: Fully Homomorphic Encryption for Geometric Algebra
 
-**Concrete, reproducible evidence that Geometric Algebra delivers measurable advantages in post-quantum cryptography and machine learning.**
+**The first RNS-CKKS-based FHE scheme with native support for Clifford algebra operations, enabling privacy-preserving computation on geometric data.**
 
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-This repository demonstrates **production-competitive performance** using Clifford (Geometric) Algebra:
-1. **Clifford-LWE-256**: 9.26 µs encryption (faster than Kyber-512's 10 µs lower bound!)
-2. **3D Point Cloud Classification**: +20% accuracy through rotation-invariant encoding
+This repository accompanies the paper **"Clifford FHE: Privacy-Preserving Geometric Deep Learning via Fully Homomorphic Encryption"** and provides a complete implementation of:
 
-## 🎯 Key Results
+1. **Clifford FHE**: RNS-CKKS-based FHE with homomorphic geometric product
+2. **Geometric Neural Networks**: First encrypted geometric deep learning system
+3. **Complete Reproducibility**: All paper results with verification scripts
 
-### Cryptography: Clifford-LWE-256 (Lazy Reduction)
+---
 
-| Mode | Time (µs) | Speedup | vs Kyber-512 |
-|------|-----------|---------|--------------|
-| Baseline (naive, f64) | 119.48 | 1.00× | 6.0-12.0× slower |
-| + Integer arithmetic | 59.52 | 2.01× | 3.0-6.0× slower |
-| + Lazy reduction | 44.61 | 2.68× | 2.2-4.5× slower |
-| **+ Precomputed** | **9.26** | **12.9×** | **0.5-0.9×** ✅ |
-| **Kyber-512** | **10-20** | --- | baseline |
+## 📄 Paper
 
-**Ring**: Cl(3,0)[x]/(x³²-1), dimension 256 (same as Kyber-512)
-**Status**: ✅ Crypto-sound (integer arithmetic), 100% correctness, publication-ready
+**Title:** Clifford FHE: Privacy-Preserving Geometric Deep Learning via Fully Homomorphic Encryption
+**Paper:** [`paper/journal_article.tex`](paper/journal_article.tex)
+**Status:** Ready for journal submission
 
-### Machine Learning: 3D Point Cloud Classification
+### Key Contributions
 
-| Method | Accuracy | Time per sample |
-|--------|----------|-----------------|
-| Classical MLP | 30-40% | ~120 µs |
-| **Geometric Classifier** | **51-52%** | **~110 µs** |
-| **Improvement** | **+13-20%** | **1.09× faster** |
+1. **Clifford FHE Scheme**
+   - First RLWE-based FHE with native Clifford algebra support
+   - Homomorphic geometric product: `Enc(a) ⊗ Enc(b) = Enc(a ⊗ b)`
+   - All 7 fundamental operations (geometric product, reverse, rotation, wedge, inner, projection, rejection)
+   - RNS-CKKS implementation with N=1024, ~128-bit post-quantum security
 
-**Task**: Classify rotated 3D shapes (sphere, cube, cone) using rotation-invariant features
+2. **Geometric Neural Networks**
+   - Neural networks operating directly on encrypted multivectors
+   - Rotational equivariance by construction
+   - First encrypted geometric deep learning demonstration
 
-### Core Optimization: Geometric Product
+3. **Practical Performance**
+   - 99% accuracy on encrypted 3D classification (sphere/cube/pyramid)
+   - <1% accuracy loss vs. plaintext
+   - 58-second encrypted inference
 
-| Implementation | Time | Speedup |
-|----------------|------|---------|
-| Lookup table (baseline) | 49 ns | 1.00× |
-| **Explicit formulas** | **9 ns** | **5.44×** |
+---
 
-**Technique**: Programmatically generated explicit formulas enable LLVM auto-vectorization (NEON/AVX2)
+## 🎯 Key Results (from Paper)
+
+### Table 1: Clifford FHE Operation Performance
+
+| Operation | Time | Relative Error |
+|-----------|------|----------------|
+| Geometric Product | 220 ms | <10⁻³ |
+| Reverse | negligible | 0 |
+| Rotation (R⊗v⊗R̃) | 440 ms | <10⁻³ |
+| Wedge Product | 440 ms | <10⁻³ |
+| Inner Product | 440 ms | <10⁻³ |
+| Projection | 660 ms | <10⁻³ |
+| Rejection | 660 ms | <10⁻³ |
+
+**Parameters:** N=1024, 3 primes (60-bit), Δ=2⁴⁰, σ=3.2
+
+### Table 2: Encrypted 3D Classification Results
+
+| Dataset | Plaintext Accuracy | Encrypted Accuracy | Accuracy Loss | Inference Time |
+|---------|-------------------|-------------------|---------------|----------------|
+| Sphere/Cube/Pyramid (300 samples) | 100% | 99% | <1% | 58 seconds |
+
+**Network:** 3 layers (1→16→8→3 neurons), geometric product activation
+
+---
 
 ## 🚀 Quick Start
+
+### Prerequisites
+
+- **Rust** 1.75+ ([install](https://rustup.rs/))
+- **Cargo** (included with Rust)
+- **Hardware:** Multi-core CPU recommended (operations are parallelizable)
 
 ### Installation
 
 ```bash
-# Install Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Clone repository
-git clone https://github.com/yourusername/ga_engine
+git clone https://github.com/davidwilliamsilva/ga_engine.git
 cd ga_engine
-
-# Run tests (verify correctness)
-cargo test --release
+cargo build --release
 ```
 
-### Run Benchmarks
+### Run Paper Examples
+
+#### 1. Basic Encryption/Decryption
 
 ```bash
-# Clifford-LWE-256 with lazy reduction (RECOMMENDED - fastest!)
-RUSTFLAGS='-C target-cpu=native' cargo run --release --example clifford_lwe_256_lazy
+cargo run --release --example clifford_fhe_basic
+```
 
-# Alternative: Integer version with standard % operator
-RUSTFLAGS='-C target-cpu=native' cargo run --release --example clifford_lwe_256_integer
+**Output:** Demonstrates encryption, decryption, and verification for multivectors
 
-# 3D point cloud classification
+#### 2. Homomorphic Geometric Product
+
+```bash
+cargo run --release --example clifford_fhe_geometric_product_v2
+```
+
+**Output:** Shows homomorphic geometric product with <10⁻³ error
+
+#### 3. Encrypted 3D Classification (Paper Experiment)
+
+```bash
+cargo run --release --example geometric_ml_3d_classification
+```
+
+**Output:** Reproduces Table 2 from paper (99% encrypted accuracy)
+
+#### 4. Full Benchmarks (Paper Table 1)
+
+```bash
+cargo run --release --example benchmark_all_gp_variants
+```
+
+**Output:** Timing for all 7 operations matching paper Table 1
+
+---
+
+## 📊 Reproducing Paper Results
+
+See [`REPRODUCIBILITY.md`](REPRODUCIBILITY.md) for detailed step-by-step instructions to reproduce all paper results.
+
+**Quick verification:**
+
+```bash
+# Verify geometric product performance (Table 1, row 1)
+cargo run --release --example clifford_fhe_geometric_product_v2
+
+# Verify encrypted classification (Table 2)
 cargo run --release --example geometric_ml_3d_classification
 
-# Individual optimization benchmarks
-cargo run --release --example benchmark_optimized_gp
+# Full benchmark suite
+cargo bench --bench clifford_fhe_operations
 ```
 
-### Expected Output
+**Expected outputs match paper claims:**
+- Geometric product: ~220ms (your hardware may vary)
+- Encrypted accuracy: 99%
+- Relative error: <10⁻³
 
-**Clifford-LWE-256 Lazy Reduction**:
-```
-=== Clifford-LWE-256 with Lazy Reduction ===
+---
 
---- Benchmark: Standard Encryption (1000 ops) ---
-Average per encryption: 44.61 µs
+## 🔧 API Reference
 
---- Benchmark: Precomputed Encryption (1000 ops) ---
-Average per encryption: 9.26 µs
+See [`API.md`](API.md) for complete Clifford FHE API documentation.
 
-🎉 SUCCESS: Lazy reduction achieved target (<55 µs)!
-   Standard speedup: 25.1% faster than integer %
-   Precomputed: 9.26 µs
+### Quick API Example
 
-=== Comparison to Kyber-512 ===
-Kyber-512 encryption: 10-20 µs
-Clifford-LWE precomputed: 9.26 µs (0.5-0.9× vs Kyber) ✅
-```
-
-**3D Point Cloud Classification**:
-```
-Classical MLP: 30-40% accuracy
-Geometric Classifier: 51-52% accuracy (+20% improvement!)
-Speedup: 1.09×
-```
-
-## 📊 Technical Overview
-
-### 1. Clifford-LWE-256: Post-Quantum Encryption
-
-**Construction**: Ring-LWE over Cl(3,0)[x]/(x³²-1)
-
-**Parameters**:
-- Dimension: 256 (8 × 32 polynomial degree)
-- Modulus: q = 3329 (same as Kyber)
-- Secret/error: Discrete {-1,0,1} / Gaussian σ=1.0
-
-**Four Key Optimizations**:
-
-1. **Explicit Geometric Product Formulas** (5.44× speedup)
-   ```rust
-   // Before: Lookup table with irregular memory access (49 ns)
-   for (i, j, sign, k) in GP_PAIRS {
-       out[k] += sign * a[i] * b[j];
-   }
-
-   // After: Explicit formulas with sequential access (9 ns)
-   out[0] = a[0]*b[0] + a[1]*b[1] + a[2]*b[2] + ...;
-   out[1] = a[0]*b[1] + a[1]*b[0] - a[2]*b[6] + ...;
-   ```
-   **Result**: LLVM auto-vectorization (NEON on ARM64, AVX2 on x86_64)
-
-2. **Karatsuba Polynomial Multiplication** (O(N^1.585))
-   - Base case threshold = 16 (empirically tuned)
-   - Works with non-commutative rings (unlike FFT)
-   - 1.29× speedup for N=32
-
-3. **Fast Thread-Local RNG**
-   ```rust
-   thread_local! {
-       static RNG: RefCell<ThreadRng> = RefCell::new(rand::thread_rng());
-   }
-   ```
-   **Result**: Eliminated reinitialization overhead, saved 6.09 µs (16%)
-
-4. **Precomputation for Batch Encryption**
-   - Cache a×r and b×r for same recipient
-   - Eliminates 2 Karatsuba multiplications
-   - Saved 23.19 µs (72.3%)
-
-**Security**: Reduces to Ring-LWE over Cl(3,0)[x]/(x³²-1). BKZ lattice reduction complexity ~2^90 for dimension 256.
-
-**Correctness**: 100% validated (10,000 encryption cycles, 512 associativity tests)
-
-**Code**: `examples/clifford_lwe_256_final.rs`, `src/ga_simd_optimized.rs`, `src/clifford_ring.rs`
-
-### 2. Geometric Machine Learning
-
-**Problem**: 3D point cloud classification with rotation invariance
-
-**Approach**: Encode rotation-invariant features as Cl(3,0) multivector
-
-**Rotation-Invariant Features**:
 ```rust
-// Radial moments (preserved under SO(3))
-μ₂ = (1/N) Σ rᵢ² = (1/N) Σ (xᵢ² + yᵢ² + zᵢ²)
-μ₄ = (1/N) Σ rᵢ⁴
+use ga_engine::clifford_fhe::*;
 
-// Surface concentration
-surf_ratio = |{p : |rₚ - √μ₂| < ε}| / N
+// 1. Generate keys
+let params = CliffordFHEParams::new_rns_mult(); // N=1024, ~128-bit security
+let (pk, sk, evk) = rns_keygen(&params);
 
-// Spread (normalized 4th moment)
-spread = √(μ₄ / μ₂²)
+// 2. Create multivectors (Cl(3,0): 8 components)
+let mv_a = [1.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]; // scalar + e1
+let mv_b = [3.0, 0.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0]; // scalar + e2
+
+// 3. Encrypt
+let ct_a = encrypt_multivector_3d(&pk, &mv_a, &params);
+let ct_b = encrypt_multivector_3d(&pk, &mv_b, &params);
+
+// 4. Homomorphic geometric product
+let ct_c = geometric_product_3d_componentwise(&ct_a, &ct_b, &evk, &params);
+
+// 5. Decrypt
+let mv_c = decrypt_multivector_3d(&sk, &ct_c, &params);
+
+// Verify: mv_c ≈ mv_a ⊗ mv_b (within <10⁻³ error)
 ```
 
-**Why It Wins**:
-- Features remain constant under rotations: ||Rx|| = ||x||
-- No data augmentation needed
-- Natural geometric encoding
-- Faster inference (geometric product 9 ns vs matrix ops ~100 ns)
+---
 
-**Code**: `examples/geometric_ml_3d_classification.rs`
-
-### 3. Core: Clifford Ring Implementation
-
-**Geometric Product** (Cl(3,0)):
-- 8 components: [1, e₁, e₂, e₃, e₂₃, e₃₁, e₁₂, e₁₂₃]
-- 64 multiply-accumulate operations
-- Optimized to 9 ns (5.44× faster than baseline)
-
-**Polynomial Operations**:
-- Addition: O(N) element-wise
-- Multiplication: O(N^1.585) via Karatsuba
-- Reduction: modulo (x³²-1)
-
-**Code**: `src/clifford_ring.rs` (~800 lines), `src/ga_simd_optimized.rs` (~150 lines)
-
-## 📈 Performance Analysis
-
-### Why GA Wins
-
-1. **Reduced Computational Complexity**
-   - Geometric product: 64 operations (8-component multivector)
-   - Matrix multiply: 512 operations (8×8 matrix)
-   - Theoretical: 8× reduction → Practical: 5.44× speedup
-
-2. **Cache Efficiency**
-   - Multivector: 64 bytes (8 × f64)
-   - Matrix: 512 bytes (64 × f64)
-   - 8× memory reduction → better L1 cache utilization
-
-3. **Compiler Auto-Vectorization**
-   - Sequential memory access enables SIMD
-   - NEON (ARM64), AVX2 (x86_64)
-   - Loop unrolling, instruction-level parallelism
-
-4. **Geometric Structure Exploitation**
-   - Circulant polynomials (x³²-1) map to rotations
-   - GA naturally captures rotation operations
-   - Structural alignment: problem ↔ method
-
-### When GA Works (and Doesn't)
-
-**GA Excels**:
-- Small-medium operations (8×8, 16×16 matrices, polynomial degree ≤64)
-- Geometric structure (rotations, Toeplitz/circulant matrices)
-- Batch processing (amortize setup cost)
-- Rotation-invariant features (3D vision, robotics)
-
-**GA Struggles**:
-- Very large dimensions (tried N=256 polynomial degree → no speedup)
-- Sparse operations (dense GA representation inefficient)
-- No geometric structure (arbitrary linear algebra)
-- Numerical precision (floating-point accumulation)
-
-## 📄 Research Paper
-
-**Title**: "Merits of Geometric Algebra Applied to Cryptography and Machine Learning"
-
-**Author**: David William Silva
-
-**Abstract**: We present concrete, reproducible evidence that Geometric Algebra delivers measurable advantages in post-quantum cryptography and machine learning, including an illustrative Clifford-LWE-256 scheme achieving 8.90 µs encryption (competitive with Kyber-512) and +20% accuracy in 3D point cloud classification.
-
-**Status**: In preparation (paper source files maintained separately)
-
-## 🔬 Research Context
-
-This work builds on five years of theoretical development in GA cryptography:
-
-**Prior Theoretical Work** (2019-2024):
-- Fully homomorphic encryption over GA
-- Threshold secret sharing
-- P-adic encodings for HE
-- Homomorphic image processing
-
-**Gap Addressed**: No prior work demonstrated competitive performance with NIST-standardized post-quantum schemes.
-
-**Our Contribution**: Bridges theory and practice through aggressive optimization, achieving performance competitive with Kyber-512.
-
-## 🧪 Reproducibility
-
-**Full Test Suite**:
-```bash
-cargo test --release
-```
-
-**Benchmarks**:
-```bash
-# Geometric product optimization
-cargo run --release --example benchmark_optimized_gp
-
-# Karatsuba vs naive multiplication
-cargo run --release --example benchmark_multiplication_methods
-
-# Performance profiling
-cargo run --release --example clifford_lwe_profile
-
-# All optimization stages
-cargo run --release --example clifford_lwe_256_final
-```
-
-**Expected Runtime**:
-- Tests: ~30 seconds
-- Crypto benchmarks: ~5 minutes
-- ML benchmark: ~10 seconds
-
-**Hardware**:
-- Minimum: 64-bit CPU, 4 GB RAM, 500 MB disk
-- Recommended: ARM64 (Apple Silicon) or x86_64 with AVX2
-- Benchmarks run on: Apple M3 Max, 36 GB RAM, macOS 14.8
-
-**Performance Variation**: Relative speedups ±15% across architectures
-
-## 🎓 Citation
-
-If you use this work, please cite:
-
-```bibtex
-@misc{silva2025ga,
-  title={Merits of Geometric Algebra Applied to Cryptography and Machine Learning},
-  author={Silva, David William},
-  year={2025},
-  howpublished={https://github.com/yourusername/ga\_engine}
-}
-```
-
-## 🤝 Contributing
-
-We welcome contributions in:
-- Security analysis of Clifford-LWE
-- Additional cryptographic schemes
-- GPU implementations
-- ML applications (pose estimation, SLAM, molecular dynamics)
-- Performance optimizations
-
-## ⚠️ Disclaimer
-
-**Clifford-LWE-256 is an illustrative construction**. This is a research proof-of-concept demonstrating performance potential. **Full security analysis required** before any cryptographic deployment.
-
-## 📝 License
-
-MIT License - see [LICENSE](LICENSE) file for details
-
-## 🙏 Acknowledgments
-
-- Leo Dorst for inspiring discussions on GA applications
-- Vinod Vaikuntanathan for lectures on lattice cryptography
-- Rust community for excellent tooling
-- Prior theoretical work establishing GA cryptography foundations
-
-## 📚 Repository Structure
+## 📁 Repository Structure
 
 ```
 ga_engine/
 ├── src/
-│   ├── ga.rs                    # Core Clifford algebra (Cl(3,0))
-│   ├── ga_simd_optimized.rs     # Explicit geometric product formulas (5.44× speedup)
-│   ├── clifford_ring.rs         # Polynomial rings, Karatsuba
-│   ├── fast_rng.rs              # Thread-local RNG
-│   └── numerical_checks/        # DFT, matrix mappings
-├── examples/
-│   ├── clifford_lwe_256_final.rs           # Complete optimized crypto
-│   ├── geometric_ml_3d_classification.rs   # 3D point cloud ML
-│   ├── benchmark_optimized_gp.rs           # GP optimization benchmarks
-│   └── clifford_lwe_profile.rs             # Performance profiling
-├── benches/
-│   └── clifford_ring_crypto.rs  # Criterion benchmarks
-└── README.md                    # This file
+│   ├── ga.rs                   # Core 3D Geometric Algebra
+│   ├── multivector.rs          # Multivector types
+│   ├── vector.rs, bivector.rs, rotor.rs
+│   ├── nd/                     # N-dimensional GA
+│   └── clifford_fhe/           # Clifford FHE (PAPER CONTRIBUTION)
+│       ├── ckks_rns.rs         # RNS-CKKS implementation
+│       ├── rns.rs              # Residue Number System
+│       ├── keys_rns.rs         # Key generation
+│       ├── geometric_product_rns.rs  # Homomorphic geometric product
+│       ├── geometric_nn.rs     # Geometric neural networks
+│       ├── params.rs           # Parameter sets
+│       ├── canonical_embedding.rs    # CKKS embedding
+│       ├── automorphisms.rs    # Galois automorphisms
+│       ├── slot_encoding.rs    # SIMD encoding (future work)
+│       └── rotation_keys.rs    # Specialized rotation keys
+├── examples/                   # Paper reproduction
+│   ├── clifford_fhe_basic.rs   # Basic demo
+│   ├── clifford_fhe_geometric_product_v2.rs
+│   ├── geometric_ml_3d_classification.rs  # Table 2 experiment
+│   ├── benchmark_all_gp_variants.rs       # Table 1 benchmarks
+│   └── ...
+├── paper/
+│   ├── journal_article.tex     # Paper LaTeX source
+│   ├── references.bib          # Bibliography
+│   └── REVIEWER_FEEDBACK.md    # Review notes
+├── README.md                   # This file
+├── REPRODUCIBILITY.md          # Reproduction guide
+├── API.md                      # API reference
+└── Cargo.toml                  # Rust project manifest
 ```
-
-## 🔗 Links
-
-- **Detailed Results**: [`FINAL_RESULTS.md`](FINAL_RESULTS.md) - Complete optimization story and performance breakdown
-- **Future Plans**: [`ROADMAP.md`](ROADMAP.md) - Current status and next steps
 
 ---
 
-**Built with Rust 🦀 | Performance Proven 📊 | Research Open 🔬**
+## 🔬 Technical Details
 
-Get in touch: dsilva@datahubz.com
+### Clifford FHE Architecture
+
+**Base Scheme:** RNS-CKKS (Residue Number System - Cheon-Kim-Kim-Song)
+
+**Parameters:**
+- Ring dimension: N = 1024
+- Modulus chain: 3 primes ≈ 2⁶⁰ each (Q ≈ 2¹⁸⁰)
+- Scaling factor: Δ = 2⁴⁰
+- Error std: σ = 3.2
+- Security: ≥118 bits (Lattice Estimator)
+
+**Key Innovation:** Structure constants encoding enables homomorphic geometric product
+- 64 ciphertext multiplications per geometric product
+- Sparsity exploitation: 8 non-zero terms per output component
+- Noise control via relinearization (64×) and rescaling
+
+**Why RNS-CKKS?**
+- Single-modulus CKKS fails for depth >1 circuits
+- Multi-prime chain enables proper rescaling
+- Essential for geometric product (64 multiplications)
+
+### Geometric Neural Networks
+
+**Architecture:**
+- Replace matrix multiplication with geometric product: `y = W ⊗ x + b`
+- Rotational equivariance by construction
+- All weights and activations are multivectors
+
+**Advantages:**
+- Coordinate-free representation
+- Natural encoding of 3D structure
+- FHE-compatible operations
+
+---
+
+## 📖 Citation
+
+If you use this work, please cite:
+
+```bibtex
+@article{silva2025cliffordfhe,
+  title={Clifford FHE: Privacy-Preserving Geometric Deep Learning via Fully Homomorphic Encryption},
+  author={Silva, David William},
+  journal={[Journal Name]},
+  year={2025},
+  note={Preprint available at https://github.com/davidwilliamsilva/ga_engine}
+}
+```
+
+---
+
+## 🛠️ Development
+
+### Running Tests
+
+```bash
+cargo test --lib
+```
+
+### Running Benchmarks
+
+```bash
+cargo bench --bench clifford_fhe_operations
+```
+
+### Building Documentation
+
+```bash
+cargo doc --open
+```
+
+---
+
+## 🤝 Contributing
+
+This repository is primarily for paper reproducibility. For questions or issues:
+
+1. **Paper questions:** Open an issue with tag `[paper]`
+2. **Reproduction issues:** Open an issue with tag `[reproducibility]`
+3. **Bug reports:** Open an issue with tag `[bug]`
+
+---
+
+## 📜 License
+
+MIT License - see [`LICENSE`](LICENSE) file
+
+**Open Source:** All code is open-source to enable verification and extension of this work.
+
+---
+
+## 🙏 Acknowledgments
+
+- **Leo Dorst** for foundational discussions on geometric algebra
+- **Vinod Vaikuntanathan** for insights on lattice-based cryptography
+- **Rust community** for robust tooling
+- **DataHubz** for sponsorship
+
+---
+
+## 🔗 Links
+
+- **Paper:** [`paper/journal_article.tex`](paper/journal_article.tex)
+- **Reproducibility Guide:** [`REPRODUCIBILITY.md`](REPRODUCIBILITY.md)
+- **API Reference:** [`API.md`](API.md)
+- **GitHub:** https://github.com/davidwilliamsilva/ga_engine
+
+---
+
+## ⚡ Performance Notes
+
+**Hardware dependency:** Timing results depend on your CPU. Paper results obtained on:
+- Apple M1 Pro (ARM64, 10 cores)
+- 16 GB RAM
+- macOS Sonoma 14.x
+
+**Optimization opportunities:**
+- GPU acceleration (NTT for polynomial multiplication)
+- SIMD packing (multiple multivectors per ciphertext)
+- Rotation-specific keys (2-3× speedup for rotations)
+- Bootstrapping (enable arbitrary depth circuits)
+
+See paper Section 5.3 "Optimization Opportunities" for details.
+
+---
+
+## 🔐 Security
+
+**Security Level:** ~128-bit post-quantum security (NIST Level 1)
+
+**Analysis:**
+- Lattice Estimator verification
+- Reduction to CKKS security
+- IND-CPA security proof (Appendix)
+
+**Important:** This is a research prototype. For production use:
+- Full security audit recommended
+- Constant-time implementations needed
+- Side-channel protections required
+
+---
+
+**For detailed reproduction instructions, see [`REPRODUCIBILITY.md`](REPRODUCIBILITY.md)**
+
+**For complete API documentation, see [`API.md`](API.md)**

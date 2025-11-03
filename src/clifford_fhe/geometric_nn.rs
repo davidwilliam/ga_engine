@@ -30,13 +30,11 @@
 //! Output (encrypted predictions)
 //! ```
 
-use crate::clifford_fhe::ckks_rns::{RnsCiphertext, RnsPlaintext, rns_encrypt, rns_decrypt};
-use crate::clifford_fhe::keys_rns::{RnsEvaluationKey, RnsPublicKey, RnsSecretKey};
+use crate::clifford_fhe::ckks_rns::{RnsCiphertext, RnsPlaintext, rns_encrypt};
+use crate::clifford_fhe::keys_rns::{RnsEvaluationKey, RnsPublicKey};
 use crate::clifford_fhe::params::CliffordFHEParams;
-use crate::clifford_fhe::geometric_product_rns::{
-    geometric_product_3d_componentwise, inner_product_3d, wedge_product_3d,
-};
-use crate::clifford_fhe::rns::{rns_add, rns_sub};
+use crate::clifford_fhe::geometric_product_rns::geometric_product_3d_componentwise;
+use crate::clifford_fhe::rns::rns_add;
 
 /// Geometric Linear Layer for 3D multivectors
 ///
@@ -205,6 +203,7 @@ pub fn geometric_activation_plaintext(m: &[f64; 8]) -> [f64; 8] {
 /// Polynomial approximation of 1/sqrt(x) for FHE
 ///
 /// Uses Chebyshev approximation on [0.5, 2.0]
+#[allow(dead_code)]
 fn inv_sqrt_approx(x: f64) -> f64 {
     // Simplified: 1/sqrt(x) ≈ 1.5 - 0.5*x for x near 1
     1.5 - 0.5 * x

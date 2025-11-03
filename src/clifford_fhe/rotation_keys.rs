@@ -17,10 +17,9 @@
 //! Expected speedup: 2-3x for rotation operations
 
 use crate::clifford_fhe::ckks_rns::RnsCiphertext;
-use crate::clifford_fhe::keys_rns::{RnsEvaluationKey, RnsSecretKey, RnsPublicKey};
+use crate::clifford_fhe::keys_rns::{RnsSecretKey, RnsPublicKey};
 use crate::clifford_fhe::params::CliffordFHEParams;
-use crate::clifford_fhe::rns::{RnsPolynomial, rns_add, rns_multiply as rns_poly_multiply};
-use rand::Rng;
+use crate::clifford_fhe::rns::RnsPolynomial;
 
 /// Rotation key for Clifford FHE
 ///
@@ -90,7 +89,7 @@ pub fn generate_rotation_keys_2d(
     //
     // This is conceptually similar to EVK but for geometric transformations.
 
-    let mut rng = rand::thread_rng();
+    let rng = rand::thread_rng();
 
     // Placeholder: generate dummy keys
     // Real implementation would encode actual transformation matrices
