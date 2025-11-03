@@ -5,16 +5,12 @@
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
----
-
-## 📄 Paper
+## Paper
 
 This repository accompanies the paper:
 
 **"Merits of Geometric Algebra Applied to Cryptography and Machine Learning"**
-- **Location:** [`paper/journal_article.tex`](paper/journal_article.tex)
-- **Author:** David William Silva
-- **Status:** Ready for submission
+- **Author:** David Silva
 
 ### Three Key Contributions
 
@@ -35,9 +31,7 @@ This repository accompanies the paper:
    - <1% accuracy loss vs. plaintext
    - Practical encrypted inference
 
----
-
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
@@ -110,9 +104,7 @@ cargo run --example clifford_fhe_basic --release
 
 Shows basic encryption/decryption cycle.
 
----
-
-## 📊 Results Summary
+## Results Summary
 
 ### Geometric Operations Performance
 
@@ -138,7 +130,7 @@ Shows basic encryption/decryption cycle.
 
 ---
 
-## 🔧 Architecture
+## Architecture
 
 ### Clifford FHE Technical Stack
 
@@ -215,7 +207,7 @@ where ⊗ is the homomorphic geometric product.
 
 ---
 
-## 📁 Repository Structure
+## Repository Structure
 
 ```
 ga_engine/
@@ -242,9 +234,6 @@ ga_engine/
 │   ├── test_geometric_operations.rs    # All 7 operations tested
 │   └── clifford_fhe_integration_tests.rs
 │
-├── paper/
-│   └── journal_article.tex         # Paper LaTeX source
-│
 ├── README.md                       # This file (ONLY documentation)
 ├── Cargo.toml                      # Rust project manifest
 └── LICENSE                         # MIT License
@@ -252,7 +241,7 @@ ga_engine/
 
 ---
 
-## 🔬 Complete API Reference
+## Complete API Reference
 
 ### Key Generation
 
@@ -350,7 +339,7 @@ let params = CliffordFHEParams::new_rns_mult_depth2_safe();  // 5 primes
 
 ---
 
-## 🧪 Testing & Verification
+## Testing & Verification
 
 ### Run All Tests
 
@@ -448,8 +437,6 @@ Max errors: <10⁻⁶ (better than paper target <10⁻³)
 - 16 GB RAM
 - macOS Sonoma 14.x
 
----
-
 ## 🔐 Security
 
 ### Security Level
@@ -486,9 +473,7 @@ Conservative estimate: λ ≥ 118 bits
 - Formal security audit
 - Timing attack mitigations
 
----
-
-## 🎓 Understanding Clifford FHE
+## Understanding Clifford FHE
 
 ### Why Geometric Algebra for FHE?
 
@@ -551,9 +536,7 @@ Geometric product: `a ⊗ b = Σᵢⱼₖ cᵢⱼₖ aᵢ bⱼ eₖ`
 - Match levels before operations
 - Fixed in: rotation, projection, rejection
 
----
-
-## 📖 Citation
+## Citation
 
 If you use this work, please cite:
 
@@ -567,9 +550,7 @@ If you use this work, please cite:
 }
 ```
 
----
-
-## 🗺️ Roadmap & Future Work
+## Roadmap & Future Work
 
 ### Near Term (Next 3-6 months)
 
@@ -591,9 +572,7 @@ If you use this work, please cite:
 - [ ] **Production Hardening** - Constant-time, side-channel protection
 - [ ] **Applications** - Medical imaging, LIDAR, CAD, autonomous vehicles
 
----
-
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - **Leo Dorst** - Foundational discussions on geometric algebra
 - **Vinod Vaikuntanathan** - Insights on lattice-based cryptography
@@ -601,9 +580,7 @@ If you use this work, please cite:
 - **DataHubz** - Research sponsorship
 - **Geometric Algebra Community** - Continued enthusiasm and support
 
----
-
-## 📜 License
+## License
 
 MIT License - see [LICENSE](LICENSE) file
 
@@ -612,18 +589,13 @@ MIT License - see [LICENSE](LICENSE) file
 - Extension of this work
 - Advancement of privacy-preserving ML
 
----
+## Links
 
-## 🔗 Links
-
-- **Paper:** [paper/journal_article.tex](paper/journal_article.tex)
 - **GitHub:** https://github.com/davidwilliamsilva/ga_engine
 - **Issues:** https://github.com/davidwilliamsilva/ga_engine/issues
 - **Email:** dsilva@datahubz.com
 
----
-
-## 💡 Complete Command Reference
+## Complete Command Reference
 
 ### Installation & Build
 
@@ -691,9 +663,7 @@ cargo run --example encrypted_3d_classification --release
 cargo test && cargo run --example encrypted_3d_classification --release
 ```
 
----
-
-## 📦 What's Included
+## What's Included
 
 This repository contains:
 
@@ -713,9 +683,6 @@ This repository contains:
 
 **Documentation:**
 - `README.md` - This file (complete reference)
-- `paper/journal_article.tex` - Paper source
-
----
 
 **This is the complete documentation for Clifford FHE. Everything you need to know is in this README.**
 
