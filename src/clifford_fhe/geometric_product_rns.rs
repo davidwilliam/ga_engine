@@ -360,9 +360,6 @@ pub fn geometric_product_2d_componentwise(
     params: &CliffordFHEParams,
 ) -> [RnsCiphertext; 4] {
     let structure = Cl2StructureConstants::new();
-    let primes = &params.moduli;
-    let num_primes = primes.len();
-    let active_primes = &primes[..num_primes];
 
     let mut results: Vec<RnsCiphertext> = Vec::with_capacity(4);
 
@@ -381,6 +378,9 @@ pub fn geometric_product_2d_componentwise(
                 params,
             );
 
+            // Get active primes for THIS product (after multiplication/rescaling)
+            let product_active_primes = &params.moduli[..product.level + 1];
+
             // Apply coefficient (for now, only handle ±1)
             let term = if coeff == -1 {
                 // Negate: multiply c0 and c1 by -1
@@ -389,7 +389,7 @@ pub fn geometric_product_2d_componentwise(
 
                 for i in 0..params.n {
                     for j in 0..neg_c0.num_primes() {
-                        let qi = active_primes[j];
+                        let qi = product_active_primes[j];
                         neg_c0.rns_coeffs[i][j] = (qi - product.c0.rns_coeffs[i][j] % qi) % qi;
                         neg_c1.rns_coeffs[i][j] = (qi - product.c1.rns_coeffs[i][j] % qi) % qi;
                     }
@@ -404,8 +404,10 @@ pub fn geometric_product_2d_componentwise(
             accumulator = Some(match accumulator {
                 None => term,
                 Some(acc) => {
-                    let sum_c0 = rns_add(&acc.c0, &term.c0, active_primes);
-                    let sum_c1 = rns_add(&acc.c1, &term.c1, active_primes);
+                    // Get active primes for accumulation (should match term's level)
+                    let acc_active_primes = &params.moduli[..acc.level + 1];
+                    let sum_c0 = rns_add(&acc.c0, &term.c0, acc_active_primes);
+                    let sum_c1 = rns_add(&acc.c1, &term.c1, acc_active_primes);
                     RnsCiphertext::new(sum_c0, sum_c1, acc.level, acc.scale)
                 }
             });
@@ -434,7 +436,6 @@ pub fn geometric_product_3d_componentwise(
     params: &CliffordFHEParams,
 ) -> [RnsCiphertext; 8] {
     let structure = Cl3StructureConstants::new();
-    let active_primes = &params.moduli[..cts_a[0].level + 1];
 
     let mut results = Vec::with_capacity(8);
 
@@ -452,6 +453,9 @@ pub fn geometric_product_3d_componentwise(
                 params,
             );
 
+            // Get active primes for THIS product (after multiplication/rescaling)
+            let product_active_primes = &params.moduli[..product.level + 1];
+
             // Apply coefficient (±1)
             let term = if coeff == -1 {
                 let mut neg_c0 = product.c0.clone();
@@ -459,7 +463,7 @@ pub fn geometric_product_3d_componentwise(
 
                 for i in 0..params.n {
                     for j in 0..neg_c0.num_primes() {
-                        let qi = active_primes[j];
+                        let qi = product_active_primes[j];
                         neg_c0.rns_coeffs[i][j] = (qi - product.c0.rns_coeffs[i][j] % qi) % qi;
                         neg_c1.rns_coeffs[i][j] = (qi - product.c1.rns_coeffs[i][j] % qi) % qi;
                     }
@@ -474,8 +478,10 @@ pub fn geometric_product_3d_componentwise(
             accumulator = Some(match accumulator {
                 None => term,
                 Some(acc) => {
-                    let sum_c0 = rns_add(&acc.c0, &term.c0, active_primes);
-                    let sum_c1 = rns_add(&acc.c1, &term.c1, active_primes);
+                    // Get active primes for accumulation (should match term's level)
+                    let acc_active_primes = &params.moduli[..acc.level + 1];
+                    let sum_c0 = rns_add(&acc.c0, &term.c0, acc_active_primes);
+                    let sum_c1 = rns_add(&acc.c1, &term.c1, acc_active_primes);
                     RnsCiphertext::new(sum_c0, sum_c1, acc.level, acc.scale)
                 }
             });

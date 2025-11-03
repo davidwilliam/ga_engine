@@ -24,6 +24,7 @@ rayon = "1.8"
 rand = "0.8"
 rand_distr = "0.4"  # For Gaussian distribution sampling (FHE)
 sha3 = "0.10"  # For SHAKE128/256 (deterministic RNG)
+num-bigint = "0.4"  # For arbitrary precision integers (RNS-CKKS with large Q)
 
 [dev-dependencies]
 criterion      = { version = "0.4", features = ["html_reports"] }

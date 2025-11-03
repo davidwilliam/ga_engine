@@ -204,9 +204,22 @@ fn generate_rns_evaluation_key(
     let w: u32 = 20;  // Digit width (B = 2^20)
 
     // Number of digits must cover Q = product of all primes
-    // For L primes of ~60 bits each, Q ≈ 2^(60*L) bits
-    let q_bits = (num_primes as u32) * 60;
+    // Calculate actual bit length by summing individual prime bit lengths
+    let q_bits: u32 = primes.iter()
+        .map(|&q| {
+            let mut bits = 0u32;
+            let mut val = q;
+            while val > 0 {
+                bits += 1;
+                val >>= 1;
+            }
+            bits
+        })
+        .sum();
     let d: usize = ((q_bits + w - 1) / w) as usize;
+
+    eprintln!("[EVK GEN] num_primes={}, total_bits={}, w={}, num_digits={}",
+              num_primes, q_bits, w, d);
 
     // Use NTT-based polynomial multiplication (imported from ckks_rns module)
     use crate::clifford_fhe::ckks_rns::polynomial_multiply_ntt;

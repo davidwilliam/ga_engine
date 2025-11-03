@@ -54,16 +54,18 @@ fn main() {
     }
     println!("   ✓ Multivector encrypted componentwise (8 ciphertexts)\n");
 
-    // 5. Decrypt and verify (using Garner's CRT with i128)
+    // 5. Decrypt and verify (using single-prime decoding)
     println!("5. Decrypting and verifying...");
     let mut decrypted_mv = [0.0; 8];
     for i in 0..8 {
         let decrypted_pt = rns_decrypt(&sk, &ciphertexts[i], &params);
 
-        // Use Garner's algorithm for CRT reconstruction (supports 2-10 primes)
-        // This uses i128 arithmetic throughout to avoid precision loss
-        let coeffs_i128 = decrypted_pt.to_coeffs_i128(&params.moduli);
-        decrypted_mv[i] = (coeffs_i128[0] as f64) / ciphertexts[i].scale;
+        // Use single-prime decoding (first prime) to avoid CRT overflow
+        // This works well when message + noise << any single prime
+        let val = decrypted_pt.coeffs.rns_coeffs[0][0];
+        let q = params.moduli[0];
+        let centered = if val > q / 2 { val - q } else { val };
+        decrypted_mv[i] = (centered as f64) / ciphertexts[i].scale;
     }
 
     println!("   Decrypted:  [{:.4}, {:.4}, {:.4}, {:.4}, {:.4}, {:.4}, {:.4}, {:.4}]",

@@ -9,6 +9,8 @@
 //! - Efficient rescaling (drop one prime)
 //! - Parallelizable operations (per-prime)
 
+use num_bigint::BigInt;
+
 /// Domain tag for RNS polynomials
 ///
 /// Tracks whether polynomial is in coefficient or NTT domain.
@@ -976,16 +978,15 @@ pub fn decompose_base_pow2(
     let n = poly.n;
     let num_primes = poly.num_primes();
 
-    // Compute Q = product of all primes
-    let mut q_prod = 1i128;
-    let mut q_bits = 0u32;
-    for &qi in primes {
-        q_prod *= qi as i128;
-        q_bits += 60;  // Assume each prime is ~60 bits
-    }
+    // CRT-based decomposition using BigInt (avoids i128 overflow for large Q)
+    //
+    // Compute Q = product of all primes (using BigInt for arbitrary precision)
+    let q_prod_big: BigInt = primes.iter()
+        .map(|&q| BigInt::from(q))
+        .product();
 
-    // Number of digits needed to represent values up to Q
-    // Need enough digits to cover Q_bits worth of data
+    // Number of bits in Q
+    let q_bits = q_prod_big.bits() as u32;
     let d = ((q_bits + w - 1) / w) as usize;
 
     // Storage for all digits: digits[t] is an RnsPolynomial
@@ -993,29 +994,36 @@ pub fn decompose_base_pow2(
 
     // Decompose each coefficient using CRT
     for i in 0..n {
-        // Step 1: CRT reconstruct to get x ∈ [0, Q)
+        // Step 1: CRT reconstruct to get x ∈ [0, Q) using BigInt
         let residues: Vec<i64> = (0..num_primes)
             .map(|j| poly.rns_coeffs[i][j])
             .collect();
 
-        let x = crt_reconstruct(&residues, primes);
+        let x_big = crt_reconstruct_bigint(&residues, primes);
 
         // Step 2: Center-lift to (-Q/2, Q/2]
-        let x_centered = center_lift(x, q_prod);
+        let q_half = &q_prod_big / 2;
+        let x_centered_big = if x_big > q_half {
+            x_big - &q_prod_big
+        } else {
+            x_big
+        };
 
         // Step 3: Balanced base-B decomposition in Z
-        let digits_z = balanced_pow2_decompose(x_centered, w, d);
+        let digits_z = balanced_pow2_decompose_bigint(&x_centered_big, w, d);
 
         // Step 4: Map each digit back to RNS consistently
         for t in 0..d {
-            let dt = digits_z[t];
+            let dt_big = &digits_z[t];
 
             // Reduce dt modulo each prime identically
             for j in 0..num_primes {
-                let qi = primes[j];
+                let qi_big = BigInt::from(primes[j]);
                 // Ensure positive residue
-                let dt_mod_qi = ((dt as i128 % qi as i128) + qi as i128) % qi as i128;
-                digits_data[t][i][j] = dt_mod_qi as i64;
+                let dt_mod_qi = ((dt_big % &qi_big) + &qi_big) % &qi_big;
+                // Convert to i64 (safe because dt_mod_qi < qi < 2^63)
+                let dt_i64: i64 = dt_mod_qi.to_string().parse().unwrap();
+                digits_data[t][i][j] = dt_i64;
             }
         }
     }
@@ -1074,4 +1082,106 @@ mod tests {
         let inv = mod_inverse(a, q);
         assert_eq!((a * inv) % q, 1);
     }
+}
+
+// =============================================================================
+// BigInt helpers for arbitrary-precision CRT (needed for large Q > 2^127)
+// =============================================================================
+
+/// CRT reconstruction using BigInt (no overflow for large Q)
+fn crt_reconstruct_bigint(residues: &[i64], primes: &[i64]) -> BigInt {
+    let num_primes = residues.len();
+    assert_eq!(num_primes, primes.len());
+
+    if num_primes == 1 {
+        return BigInt::from(residues[0]);
+    }
+
+    // Compute Q = product of all primes
+    let q_prod: BigInt = primes.iter().map(|&q| BigInt::from(q)).product();
+
+    // CRT formula: x = Σ ri * (Q/qi) * [(Q/qi)^{-1} mod qi] mod Q
+    let mut result = BigInt::from(0);
+    for i in 0..num_primes {
+        let qi = BigInt::from(primes[i]);
+        let ri = BigInt::from(residues[i]);
+
+        // Compute Q/qi
+        let q_div_qi = &q_prod / &qi;
+
+        // Compute (Q/qi)^{-1} mod qi using extended GCD
+        let inv_big = mod_inverse_bigint(&q_div_qi, &qi);
+
+        // Compute: term = ri * (Q/qi) * inv mod Q
+        let basis = (&q_div_qi * &inv_big) % &q_prod;
+        let term = (ri * basis) % &q_prod;
+
+        result = (result + term) % &q_prod;
+    }
+
+    // Ensure positive result
+    if result < BigInt::from(0) {
+        result += &q_prod;
+    }
+
+    result
+}
+
+/// Modular inverse using extended GCD (BigInt version)
+fn mod_inverse_bigint(a: &BigInt, m: &BigInt) -> BigInt {
+    use num_bigint::Sign;
+
+    // Extended GCD to find x such that a*x ≡ 1 (mod m)
+    let (gcd, x, _) = extended_gcd_bigint(a, m);
+
+    if gcd != BigInt::from(1) {
+        panic!("Modular inverse does not exist (gcd != 1)");
+    }
+
+    // Ensure positive result
+    let mut result = x % m;
+    if result.sign() == Sign::Minus {
+        result += m;
+    }
+
+    result
+}
+
+/// Extended GCD for BigInt: returns (gcd, x, y) such that gcd = a*x + b*y
+fn extended_gcd_bigint(a: &BigInt, b: &BigInt) -> (BigInt, BigInt, BigInt) {
+    if b == &BigInt::from(0) {
+        return (a.clone(), BigInt::from(1), BigInt::from(0));
+    }
+
+    let (gcd, x1, y1) = extended_gcd_bigint(b, &(a % b));
+    let x = y1.clone();
+    let y = x1 - (a / b) * &y1;
+
+    (gcd, x, y)
+}
+
+/// Balanced base-B decomposition for BigInt
+fn balanced_pow2_decompose_bigint(x: &BigInt, w: u32, d: usize) -> Vec<BigInt> {
+    let b = BigInt::from(1i64 << w);  // B = 2^w
+    let b_half = &b / 2;               // B/2
+
+    let mut digits = Vec::with_capacity(d);
+    let mut remainder = x.clone();
+
+    for _ in 0..d {
+        // Extract digit: dt = remainder mod B, balanced to (-B/2, B/2]
+        let dt_unbalanced = &remainder % &b;
+        let dt = if dt_unbalanced > b_half {
+            &dt_unbalanced - &b  // Shift to negative range
+        } else {
+            dt_unbalanced
+        };
+
+        digits.push(dt.clone());
+
+        // Update remainder: remainder = (remainder - dt) / B
+        remainder = (remainder - &dt) / &b;
+    }
+
+    digits
 }

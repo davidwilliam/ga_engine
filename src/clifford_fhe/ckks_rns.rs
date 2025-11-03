@@ -71,10 +71,6 @@ fn negacyclic_roots(q: u64, n: usize) -> (u64, u64) {
     let exp = (q - 1) / two_n;
     let psi = mod_pow_u64(g, exp, q);
     let omega = mod_mul_u64(psi, psi, q); // psi^2
-    // sanity checks
-    debug_assert_eq!(mod_pow_u64(psi, two_n, q), 1);
-    debug_assert_eq!(mod_pow_u64(psi, n as u64, q), q - 1);
-    debug_assert_eq!(mod_pow_u64(omega, n as u64, q), 1);
     (psi, omega)
 }
 

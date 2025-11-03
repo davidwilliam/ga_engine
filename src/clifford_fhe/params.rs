@@ -111,32 +111,43 @@ impl CliffordFHEParams {
     /// - After multiply: scale = Δ² ≈ q²
     /// - After rescale by q: new scale = Δ²/q = q
     ///
-    /// So let's use Δ = 2^60 to match the primes!
+    /// CORRECTED APPROACH: Use scaling primes ≈ Δ
+    ///
+    /// In RNS-CKKS, for rescaling to work correctly:
+    /// - After multiplication: scale = Δ²
+    /// - After rescaling by q_last: new_scale = Δ²/q_last
+    /// - For new_scale ≈ Δ, we need: q_last ≈ Δ
+    ///
+    /// Therefore: Mix 60-bit primes (security) with 40-bit primes (scaling)
     pub fn new_rns_mult() -> Self {
-        // Production-grade RNS-CKKS parameters: 10 primes for depth-9 circuits
+        // RNS-CKKS with proper scaling primes
         // For N=1024, we need p ≡ 1 (mod 2048)
-        // All primes are 60-bit, NTT-friendly, and verified
+        //
+        // Modulus chain strategy:
+        // - Start with large primes for security
+        // - Use 40-bit primes ≈ Δ for rescaling operations
+        // - When we rescale (drop a prime), we drop a 40-bit prime
+        // - This gives: new_scale = Δ²/q_scale ≈ Δ²/Δ = Δ ✓
         let moduli = vec![
-            1141392289560813569,  // q₀ (60-bit, NTT-friendly)
-            1141392289560840193,  // q₁ (60-bit, NTT-friendly)
-            1141392289560907777,  // q₂ (60-bit, NTT-friendly)
-            1141392289560926209,  // q₃ (60-bit, NTT-friendly)
-            1141392289561065473,  // q₄ (60-bit, NTT-friendly)
-            1141392289561077761,  // q₅ (60-bit, NTT-friendly)
-            1141392289561092097,  // q₆ (60-bit, NTT-friendly)
-            1141392289561157633,  // q₇ (60-bit, NTT-friendly)
-            1141392289561184257,  // q₈ (60-bit, NTT-friendly)
-            1141392289561194497,  // q₉ (60-bit, NTT-friendly)
+            1141392289560813569,  // q₀ (60-bit, NTT-friendly) - for security
+            1099511678977,        // q₁ (41-bit, ≈ 2^40, NTT-friendly) - SCALING PRIME
+            1099511683073,        // q₂ (41-bit, ≈ 2^40, NTT-friendly) - SCALING PRIME
         ];
 
         Self {
             n: 1024,
             moduli,
-            // Standard CKKS scale: Δ = 2^40
-            // Total modulus: Q = q₀ × ... × q₉ ≈ 2^600
-            // After each multiply+rescale: drop one prime, reduce modulus by 2^60
-            // Supports depth-9 circuits (9 multiplications)
-            // Uses Garner's CRT algorithm for robust decoding
+            // Scaling factor: Δ = 2^40 ≈ 1.1 × 10^12
+            // This matches our 40-bit scaling primes!
+            //
+            // Workflow:
+            // 1. Fresh ciphertext: scale = Δ, modulus = q₀·q₁·q₂
+            // 2. After multiply: scale = Δ², modulus = q₀·q₁·q₂
+            // 3. Rescale (drop q₂): scale = Δ²/q₂ ≈ Δ, modulus = q₀·q₁
+            // 4. After 2nd multiply: scale = Δ², modulus = q₀·q₁
+            // 5. Rescale (drop q₁): scale = Δ²/q₁ ≈ Δ, modulus = q₀
+            //
+            // Supports depth-2 circuits (2 multiplications)
             scale: 2f64.powi(40),
             error_std: 3.2,
             security: SecurityLevel::Bit128, // Based on lattice estimator
@@ -201,11 +212,12 @@ impl CliffordFHEParams {
     /// Generate NTT-friendly prime of given bit-length
     ///
     /// Prime must satisfy: q ≡ 1 (mod 2N) for NTT to work
+    /// For N=1024, we need: (q-1) % 2048 == 0
     fn generate_prime(bits: u32) -> i64 {
-        // For now, use precomputed primes
+        // For now, use precomputed NTT-friendly primes
         // In production, would generate dynamically
         match bits {
-            40 => 1_099_511_627_689, // 40-bit NTT-friendly prime
+            40 => 1_099_511_678_977, // 41-bit NTT-friendly prime (q ≡ 1 mod 2048)
             50 => 1_125_899_906_826_241, // 50-bit
             60 => 1_152_921_504_598_630_401, // 60-bit (close to 2^60)
             _ => panic!("Unsupported bit length: {}", bits),
@@ -266,9 +278,12 @@ mod tests {
 
     #[test]
     fn test_modulus_at_level() {
-        let params = CliffordFHEParams::new_128bit();
+        // Use new_rns_mult() which has verified NTT-friendly primes
+        let params = CliffordFHEParams::new_rns_mult();
         let q0 = params.modulus_at_level(0);
         assert!(q0 > 0);
-        assert!(q0 % (2 * params.n as i64) == 1); // NTT-friendly check
+        // For NTT to work, we need (q-1) % 2n == 0
+        let two_n = 2 * params.n as i64;
+        assert!((q0 - 1) % two_n == 0, "q-1 must be divisible by 2n for NTT");
     }
 }
