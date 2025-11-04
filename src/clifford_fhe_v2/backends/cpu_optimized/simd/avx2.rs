@@ -302,7 +302,6 @@ unsafe fn montgomery_mul_avx2(
 /// Requires AVX2 support. Caller must ensure `a_vec`, `b_vec`, and `q_vec`
 /// contain valid u64 values.
 #[target_feature(enable = "avx2")]
-#[inline(always)]
 unsafe fn add_mod_avx2(a_vec: __m256i, b_vec: __m256i, q_vec: __m256i) -> __m256i {
     // sum = a + b
     let sum = _mm256_add_epi64(a_vec, b_vec);
@@ -320,7 +319,6 @@ unsafe fn add_mod_avx2(a_vec: __m256i, b_vec: __m256i, q_vec: __m256i) -> __m256
 /// # Safety
 /// Requires AVX2 support.
 #[target_feature(enable = "avx2")]
-#[inline(always)]
 unsafe fn sub_mod_avx2(a_vec: __m256i, b_vec: __m256i, q_vec: __m256i) -> __m256i {
     // mask = (a >= b) ? 0xFFFFFFFFFFFFFFFF : 0
     let cmp = _mm256_cmpgt_epi64(a_vec, _mm256_sub_epi64(b_vec, _mm256_set1_epi64x(1)));
@@ -331,6 +329,29 @@ unsafe fn sub_mod_avx2(a_vec: __m256i, b_vec: __m256i, q_vec: __m256i) -> __m256
     let diff_with_q = _mm256_add_epi64(_mm256_sub_epi64(a_vec, b_vec), q_vec);
 
     _mm256_blendv_epi8(diff_with_q, diff, cmp)
+}
+
+/// Vectorized modular multiplication: (a * b) mod q for 4 u64 values
+///
+/// Uses scalar fallback per lane since AVX2 lacks 64×64→128 bit multiplication.
+///
+/// # Safety
+/// Requires AVX2 support.
+#[target_feature(enable = "avx2")]
+unsafe fn mul_mod_avx2(a_vec: __m256i, b_vec: __m256i, q_vec: __m256i, q: u64) -> __m256i {
+    // Extract values, compute using scalar, pack back
+    let mut result = [0u64; 4];
+    let mut a_arr = [0u64; 4];
+    let mut b_arr = [0u64; 4];
+
+    _mm256_storeu_si256(a_arr.as_mut_ptr() as *mut __m256i, a_vec);
+    _mm256_storeu_si256(b_arr.as_mut_ptr() as *mut __m256i, b_vec);
+
+    for i in 0..4 {
+        result[i] = mul_mod_scalar(a_arr[i], b_arr[i], q);
+    }
+
+    _mm256_loadu_si256(result.as_ptr() as *const __m256i)
 }
 
 // ============================================================================
