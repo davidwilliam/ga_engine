@@ -12,7 +12,7 @@
 - **Performance V2 CPU:** **0.441s** (30× speedup with Rayon parallelization)
 - **Performance V2 Metal GPU:** **0.034s** (387× speedup vs V1, 13× vs V2 CPU)
 - **Tests:** 127 tests passing in V2, all geometric operations working with <10⁻⁶ error
-- **Status:** Production-ready V2 with CPU (Rayon) and Metal GPU backends
+- **Status:** Production-candidate V2 with CPU (Rayon) and Metal GPU backends
 - **Accuracy:** 99% encrypted 3D classification (sphere/cube/pyramid)
 - **Get Started:** `cargo test --test test_geometric_operations_metal --features v2-gpu-metal -- --nocapture`
 
@@ -47,7 +47,7 @@ This repository contains **two implementations** of Clifford FHE:
 - **Tests:** 127 tests passing (NTT, RNS, CKKS, Keys, Multiplication, Geometric operations)
 - **Optimizations:** O(n log n) NTT + Rayon parallelization + Metal GPU acceleration + LLVM-optimized modular arithmetic
 - **Use when:** Maximum performance, research prototypes, production deployment, Apple Silicon hardware
-- **Characteristics:** Multiple backends, highly optimized, production-ready
+- **Characteristics:** Multiple backends, highly optimized, production-candidate
 
 **Quick Start:**
 ```bash
@@ -140,11 +140,11 @@ cargo run --example encrypted_3d_classification --release --features v2
 
 **V2 Metal GPU (Apple Silicon):**
 ```bash
-# Test Metal GPU backend with beautiful output (0.034s per geometric product - 387× faster!)
+# Benchmark Metal GPU backend (0.034s per geometric product - 387× speedup)
 cargo test --test test_geometric_operations_metal --features v2-gpu-metal -- --nocapture
 
-# Shows: Correctness verification, performance benchmarks, speedup calculations
-# Includes: Colored output, progress bars, performance grading (A+/A/B/C)
+# Output includes: Correctness verification, statistical analysis (n=10, CV, std dev)
+# Performance metrics: Mean/min/max timing, speedup calculations, throughput analysis
 ```
 
 **V2 CUDA GPU (Future Work):**
@@ -194,8 +194,8 @@ Projected full network inference: ~129s (2.8× faster than V1)
   Metal GPU Backend - Clifford FHE Geometric Operations
 ════════════════════════════════════════════════════════════════════════════════
 
-  🚀 Testing the world's fastest homomorphic geometric algebra implementation
-  🎯 Achievement: 387× speedup vs V1, 13× speedup vs V2 CPU
+  Benchmarking Metal GPU backend for homomorphic geometric algebra
+  Measured performance: 387× speedup vs V1 baseline, 13× vs V2 CPU
 
   GPU Architecture ............. Apple Metal (M1/M2/M3)
   Ring Dimension ............... N = 1024
@@ -215,13 +215,30 @@ Projected full network inference: ~129s (2.8× faster than V1)
 
   ▓▓▓▓▓▓▓▓▓▓ Complete!
 
-  Mean Time: 34-92 ms (typical: ~40ms)
-  🏆 Performance Grade: A+ (Sub-40ms achieved!)
+  Mean Time: 40 ms
+  Min Time: 34 ms
+  Max Time: 92 ms
+  Standard Deviation: 18.2 ms (45.5% CV)
 
-  💡 Practical Performance:
-    • 25 geometric products per second
-    • 1500 operations per minute
-    • 2.1M operations per day
+  Speedup: 325× vs V1 Baseline (13s)
+  Speedup: 11× vs V2 CPU (441ms)
+
+  Performance Analysis:
+    • Target achievement: Exceeds <50ms target by >20%
+    • Statistical significance: High confidence (n=10, CV=45.5%)
+
+  Throughput Metrics:
+    • 25.0 operations/second
+    • 1500 operations/minute
+    • 2.2M operations/day
+
+════════════════════════════════════════════════════════════════════════════════
+  Metal GPU Test Suite Complete
+════════════════════════════════════════════════════════════════════════════════
+
+  ✓ All geometric operations verified on GPU
+  ✓ Measured performance: 387× speedup vs V1 baseline (13s → 33.6ms)
+  ✓ Achieved target: Sub-50ms homomorphic geometric product
 ```
 
 #### 2. Test All Geometric Operations
@@ -394,61 +411,6 @@ where ⊗ is the homomorphic geometric product.
 - Rotational equivariance (no data augmentation needed)
 - Natural 3D structure encoding
 - FHE-compatible operations
-
----
-
-## Repository Structure
-
-```
-ga_engine/
-├── src/
-│   ├── clifford_fhe_v1/            # V1 (Baseline) - STABLE REFERENCE
-│   │   ├── ckks_rns.rs             # RNS-CKKS encryption/decryption
-│   │   ├── rns.rs                  # Residue Number System arithmetic
-│   │   ├── geometric_product_rns.rs # All 7 homomorphic operations
-│   │   ├── keys_rns.rs             # Key generation (pk, sk, evk)
-│   │   ├── params.rs               # Parameter sets (security levels)
-│   │   ├── canonical_embedding.rs  # CKKS slot encoding
-│   │   ├── automorphisms.rs        # Galois automorphisms
-│   │   ├── geometric_nn.rs         # Geometric neural networks
-│   │   ├── rotation_keys.rs        # Rotation-specific keys
-│   │   └── slot_encoding.rs        # Slot encoding utilities
-│   │
-│   ├── clifford_fhe_v2/            # V2 (Optimized) - PRODUCTION CANDIDATE
-│   │   ├── core/                   # Trait abstractions
-│   │   │   ├── traits.rs           # CliffordFHE trait (common interface)
-│   │   │   └── types.rs            # Backend selection, error types
-│   │   │
-│   │   └── backends/               # Multiple backend implementations
-│   │       ├── cpu_optimized/      # NTT + SIMD (10-20× speedup)
-│   │       ├── gpu_cuda/           # CUDA GPU (50-100× speedup)
-│   │       ├── gpu_metal/          # Metal GPU (30-50× speedup)
-│   │       └── simd_batched/       # Slot packing (8-16× throughput)
-│   │
-│   ├── ga.rs                       # Plaintext geometric algebra (Cl(3,0))
-│   ├── multivector.rs              # Multivector type
-│   └── [vector.rs, bivector.rs, rotor.rs, ...]
-│
-├── examples/
-│   ├── encrypted_3d_classification.rs  # Main ML application demo
-│   ├── clifford_fhe_basic.rs           # Basic encryption demo
-│   └── [more examples...]
-│
-├── tests/
-│   ├── test_geometric_operations.rs    # Comprehensive suite with progress bars
-│   ├── test_clifford_operations_isolated.rs  # Individual operation tests (9 tests)
-│   ├── clifford_fhe_integration_tests.rs    # Fast integration tests
-│   └── test_utils.rs                   # Test utility framework
-│
-├── paper/                          # Research publications (LaTeX sources)
-│   └── [publication materials]
-│
-├── ARCHITECTURE.md                 # V1/V2 design philosophy (READ THIS!)
-├── V2_PHASE1_COMPLETE.md           # V2 Phase 1 completion summary (NTT optimization)
-├── README.md                       # This file
-├── Cargo.toml                      # Rust project manifest
-└── LICENSE                         # MIT License
-```
 
 ---
 
@@ -720,7 +682,7 @@ During V2 development, we implemented and tested multiple modular multiplication
 - Trust LLVM for modular arithmetic optimization
 - Algorithmic improvements (O(n²) → O(n log n)) matter more than low-level SIMD
 - SIMD works well for linear operations but struggles with complex modular arithmetic
-- Montgomery infrastructure is production-ready and preserved for future GPU/specialized hardware work
+- Montgomery infrastructure is production-candidate and preserved for future GPU/specialized hardware work
 
 ### V2 Optimization Strategy
 
@@ -923,8 +885,9 @@ If you use this work, please cite:
 
 ## Acknowledgments
 
+- **Ekchard Hittzer and Dietmar Hildenbrand** - Exceptional encouragement and support for research and development on Geometric Algebra
 - **Leo Dorst** - Foundational discussions on geometric algebra
-- **Vinod Vaikuntanathan** - Insights on lattice-based cryptography
+- **Vinod Vaikuntanathan** - Public work and insights on lattice-based cryptography
 - **Rust Community** - Robust tooling and libraries
 - **DataHubz** - Research sponsorship
 - **Geometric Algebra Community** - Continued enthusiasm and support
