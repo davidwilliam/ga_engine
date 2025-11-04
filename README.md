@@ -17,9 +17,9 @@ This repository contains **two implementations** of Clifford FHE:
 - **Characteristics:** Straightforward implementation, well-documented, fully tested
 
 ### V2 (Optimized - Active Development)
-- **Status:** 🚧 Phase 1 foundation complete (NTT, RNS, Parameters)
+- **Status:** 🚧 Core cryptographic primitives complete (NTT, RNS, CKKS, Keys)
 - **Goal:** 59× speedup (13s → 220ms per geometric product)
-- **Progress:** Harvey NTT ✅ | Barrett/RNS ✅ | Params ✅ | CKKS 🚧 | Keys 🚧 | GeomOps 🚧
+- **Progress:** Harvey NTT ✅ | Barrett/RNS ✅ | Params ✅ | CKKS ✅ | Keys ✅ | GeomOps 🚧
 - **Optimizations:** Harvey NTT, GPU acceleration (CUDA/Metal), SIMD batching
 - **Use when:** Maximum performance, practical deployment, production use
 - **Characteristics:** Multiple backends, hardware-accelerated, throughput-oriented
@@ -857,11 +857,11 @@ cargo test --features v1
 
 #### V2 Available Tests
 
-**Status:** Phase 1 foundation complete (NTT, RNS, Parameters)
+**Status:** Core cryptographic primitives complete (NTT, RNS, CKKS, Keys)
 
 **All V2 Tests:**
 ```bash
-# Run all V2 tests (35 tests, <1 second)
+# Run all V2 tests (45 tests, <0.1 second)
 cargo test --lib clifford_fhe_v2 --features v2 -- --nocapture
 ```
 
@@ -875,14 +875,22 @@ cargo test --lib rns::tests --features v2 -- --nocapture
 
 # Params Module (8 tests) - NTT-friendly parameter sets
 cargo test --lib clifford_fhe_v2::params::tests --features v2 -- --nocapture
+
+# CKKS Module (6 tests) - Encryption/decryption with NTT
+cargo test --lib clifford_fhe_v2::backends::cpu_optimized::ckks::tests --features v2 -- --nocapture
+
+# Keys Module (5 tests) - Key generation with NTT-based polynomial multiplication
+cargo test --lib clifford_fhe_v2::backends::cpu_optimized::keys::tests --features v2 -- --nocapture
 ```
 
-**V2 Phase 1 Complete:**
+**V2 Cryptographic Primitives Complete:**
 - ✅ Harvey Butterfly NTT (~600 lines, 6 tests passing)
 - ✅ Barrett Reduction & RNS (~550 lines, 21 tests passing)
 - ✅ V2 Parameter Sets (~350 lines, 8 tests passing)
+- ✅ CKKS Encryption/Decryption (~360 lines, 6 tests passing)
+- ✅ Key Generation (~470 lines, 5 tests passing)
 
-**Next:** V2 CKKS encryption/decryption, key generation, geometric operations
+**Next:** Geometric operations with NTT (geometric product, wedge, inner, etc.)
 
 ### Verify Claims
 
