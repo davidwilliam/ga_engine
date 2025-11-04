@@ -319,24 +319,27 @@ impl RnsRepresentation {
 /// RNS Context: Precomputed data for fast RNS operations.
 ///
 /// Stores Barrett reducers for each modulus and CRT reconstruction constants.
+/// For large modulus chains (>2 primes), CRT is computed on-demand to avoid overflow.
 #[derive(Clone, Debug)]
 pub struct RnsContext {
     /// RNS moduli (coprime 60-bit primes)
     pub moduli: Vec<u64>,
     /// Barrett reducers for each modulus
     pub reducers: Vec<BarrettReducer>,
-    /// Product of all moduli: Q = q₁ * q₂ * ... * qₖ
-    pub total_modulus: u128,
-    /// CRT constants: m_hat[i] = Q / q[i]
-    pub m_hat: Vec<u128>,
-    /// CRT constants: m_hat_inv[i] = (Q / q[i])^(-1) mod q[i]
-    pub m_hat_inv: Vec<u64>,
+    /// Product of all moduli: Q = q₁ * q₂ * ... * qₖ (if it fits in u128)
+    /// None if product overflows u128
+    pub total_modulus: Option<u128>,
+    /// CRT constants: m_hat[i] = Q / q[i] (only if total_modulus fits)
+    pub m_hat: Option<Vec<u128>>,
+    /// CRT constants: m_hat_inv[i] = (Q / q[i])^(-1) mod q[i] (only if total_modulus fits)
+    pub m_hat_inv: Option<Vec<u64>>,
 }
 
 impl RnsContext {
     /// Creates a new RNS context from coprime moduli.
     ///
-    /// Precomputes Barrett reducers and CRT reconstruction constants.
+    /// Precomputes Barrett reducers and CRT reconstruction constants if the
+    /// total modulus fits in u128. For larger modulus chains, CRT is computed on-demand.
     ///
     /// # Arguments
     /// * `moduli` - Pairwise coprime moduli (typically 60-bit NTT-friendly primes)
@@ -346,31 +349,39 @@ impl RnsContext {
         // Create Barrett reducers
         let reducers: Vec<BarrettReducer> = moduli.iter().map(|&q| BarrettReducer::new(q)).collect();
 
-        // Compute total modulus Q = q₁ * q₂ * ... * qₖ
-        let total_modulus = moduli.iter().fold(1u128, |acc, &q| acc * (q as u128));
+        // Try to compute total modulus Q = q₁ * q₂ * ... * qₖ
+        // If it overflows u128, set to None and compute CRT on-demand
+        let total_modulus_opt = moduli
+            .iter()
+            .try_fold(1u128, |acc, &q| acc.checked_mul(q as u128));
 
-        // Precompute CRT constants
-        let mut m_hat = Vec::with_capacity(moduli.len());
-        let mut m_hat_inv = Vec::with_capacity(moduli.len());
+        // Precompute CRT constants if total modulus fits
+        let (m_hat_opt, m_hat_inv_opt) = if let Some(total_modulus) = total_modulus_opt {
+            let mut m_hat = Vec::with_capacity(moduli.len());
+            let mut m_hat_inv = Vec::with_capacity(moduli.len());
 
-        for (i, &qi) in moduli.iter().enumerate() {
-            // m_hat[i] = Q / qi
-            let m_hat_i = total_modulus / (qi as u128);
-            m_hat.push(m_hat_i);
+            for (i, &qi) in moduli.iter().enumerate() {
+                // m_hat[i] = Q / qi
+                let m_hat_i = total_modulus / (qi as u128);
+                m_hat.push(m_hat_i);
 
-            // m_hat_inv[i] = (Q / qi)^(-1) mod qi
-            // We need to compute (m_hat_i mod qi)^(-1) mod qi
-            let m_hat_mod_qi = (m_hat_i % (qi as u128)) as u64;
-            let inv = reducers[i].inv(m_hat_mod_qi);
-            m_hat_inv.push(inv);
-        }
+                // m_hat_inv[i] = (Q / qi)^(-1) mod qi
+                let m_hat_mod_qi = (m_hat_i % (qi as u128)) as u64;
+                let inv = reducers[i].inv(m_hat_mod_qi);
+                m_hat_inv.push(inv);
+            }
+
+            (Some(m_hat), Some(m_hat_inv))
+        } else {
+            (None, None)
+        };
 
         Self {
             moduli,
             reducers,
-            total_modulus,
-            m_hat,
-            m_hat_inv,
+            total_modulus: total_modulus_opt,
+            m_hat: m_hat_opt,
+            m_hat_inv: m_hat_inv_opt,
         }
     }
 
@@ -379,31 +390,39 @@ impl RnsContext {
     /// Given (x mod q₁, x mod q₂, ..., x mod qₖ), reconstructs x mod Q
     /// where Q = q₁ * q₂ * ... * qₖ.
     ///
-    /// **Formula:**
-    /// x = Σᵢ xᵢ * (Q/qᵢ) * [(Q/qᵢ)^(-1) mod qᵢ] mod Q
+    /// **Note:** Only works if total modulus fits in u128. For large modulus chains,
+    /// use partial reconstruction or work directly in RNS domain.
     ///
     /// # Arguments
     /// * `rns` - RNS representation
     ///
     /// # Returns
     /// Integer x in [0, Q) represented as u128
+    ///
+    /// # Panics
+    /// Panics if total modulus doesn't fit in u128
     pub fn reconstruct(&self, rns: &RnsRepresentation) -> u128 {
         assert_eq!(
             rns.moduli, self.moduli,
             "RNS representation must use same moduli as context"
         );
 
+        let total_modulus = self.total_modulus.expect(
+            "Cannot reconstruct: total modulus too large for u128. Use fewer primes or work in RNS domain."
+        );
+        let m_hat = self.m_hat.as_ref().expect("CRT constants not precomputed");
+        let m_hat_inv = self.m_hat_inv.as_ref().expect("CRT constants not precomputed");
+
         let mut result = 0u128;
 
         for i in 0..self.moduli.len() {
             let xi = rns.values[i];
-            let qi = self.moduli[i];
 
             // Compute: xi * (Q/qi) * [(Q/qi)^(-1) mod qi]
-            let term1 = (xi as u128) * self.m_hat[i];
-            let term2 = (self.m_hat_inv[i] as u128) * term1;
+            let term1 = (xi as u128) * m_hat[i];
+            let term2 = (m_hat_inv[i] as u128) * term1;
 
-            result = (result + term2) % self.total_modulus;
+            result = (result + term2) % total_modulus;
         }
 
         result
@@ -573,9 +592,13 @@ mod tests {
 
         assert_eq!(ctx.moduli, moduli);
         assert_eq!(ctx.reducers.len(), 3);
-        assert_eq!(ctx.total_modulus, 97u128 * 101 * 103);
-        assert_eq!(ctx.m_hat.len(), 3);
-        assert_eq!(ctx.m_hat_inv.len(), 3);
+
+        // For small primes, total modulus should fit in u128
+        assert_eq!(ctx.total_modulus, Some(97u128 * 101 * 103));
+        assert!(ctx.m_hat.is_some());
+        assert!(ctx.m_hat_inv.is_some());
+        assert_eq!(ctx.m_hat.as_ref().unwrap().len(), 3);
+        assert_eq!(ctx.m_hat_inv.as_ref().unwrap().len(), 3);
     }
 
     #[test]

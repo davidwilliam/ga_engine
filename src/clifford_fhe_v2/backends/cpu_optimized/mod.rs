@@ -19,6 +19,9 @@ pub mod ntt;
 /// Optimized RNS arithmetic with Barrett reduction
 pub mod rns;
 
+/// V2 CKKS encryption/decryption with NTT
+pub mod ckks;
+
 // TODO: Implement optimized geometric product
 // pub mod geometric_product;
 
