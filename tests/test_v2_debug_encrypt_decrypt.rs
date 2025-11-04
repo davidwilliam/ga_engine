@@ -280,7 +280,7 @@ fn multiply_ciphertexts_no_relin(
     b: &ga_engine::clifford_fhe_v2::backends::cpu_optimized::ckks::Ciphertext,
     params: &CliffordFHEParams,
 ) -> Ciphertext2 {
-    use ga_engine::clifford_fhe_v2::backends::cpu_optimized::ntt::NttContext;
+    
 
     let n = params.n;
     let level = a.level.min(b.level);

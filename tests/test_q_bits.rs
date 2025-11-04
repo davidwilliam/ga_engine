@@ -1,7 +1,6 @@
 // Check actual bit length of Q
 
 use num_bigint::BigInt;
-use num_traits::One;
 
 #[test]
 fn test_q_product_bits() {

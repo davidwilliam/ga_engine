@@ -1,17 +1,47 @@
 //! Metal GPU Backend for Clifford FHE V2 (Apple Silicon)
 //!
-//! **Target:** 30-50× speedup vs V1 baseline
+//! **Target:** 260× speedup vs V1 baseline (sub-50ms geometric product)
 //!
 //! **Optimizations:**
-//! - Metal compute shaders for NTT
-//! - Unified memory architecture (M1/M2/M3 advantage)
-//! - Neural Engine integration (experimental)
+//! - Metal compute shaders for NTT (O(n log n) on GPU)
+//! - Unified memory architecture (M1/M2/M3 zero-copy advantage)
+//! - Parallel ciphertext operations across 40 GPU cores (M3 Max)
+//! - Batched geometric product computation
 //!
 //! **Requirements:**
 //! - Apple Silicon Mac (M1/M2/M3)
-//! - `metal` Rust crate
+//! - macOS 10.13+ with Metal support
+//! - `metal` Rust crate (0.27+)
 //!
-//! **Status:** Phase 2 implementation (V2 optimization roadmap)
+//! **Status:** Active development (Phase 3 of V2 roadmap)
+//!
+//! **Architecture:**
+//! ```
+//! CPU                          GPU (Metal)
+//! ----                         -----------
+//! Ciphertext                   → Upload to GPU buffers
+//! Key material                 → Upload once, reuse
+//!
+//! Geometric Product:
+//!   For each of 8 components:
+//!     For each of 8 terms:
+//!       NTT(a[i])              → GPU parallel
+//!       NTT(b[j])              → GPU parallel
+//!       Pointwise multiply     → GPU parallel
+//!       INTT(result)           → GPU parallel
+//!       Relinearize            → GPU parallel
+//!
+//! Result                       ← Download from GPU
+//! ```
+
+#[cfg(feature = "v2-gpu-metal")]
+pub mod device;
+
+#[cfg(feature = "v2-gpu-metal")]
+pub mod ntt;
+
+#[cfg(feature = "v2-gpu-metal")]
+pub mod geometric;
 
 #[cfg(feature = "v2-gpu-metal")]
 use crate::clifford_fhe_v2::core::{BackendCapabilities, BackendInfo};
@@ -36,8 +66,9 @@ impl BackendInfo for GpuMetalBackend {
 
     fn recommended_params() -> Vec<String> {
         vec![
-            "N=1024, primes=3 (Apple Silicon optimal)".to_string(),
-            "N=2048, primes=5 (balanced)".to_string(),
+            "N=1024, primes=3 (Apple Silicon optimal, target <50ms)".to_string(),
+            "N=2048, primes=5 (balanced, target <100ms)".to_string(),
+            "N=4096, primes=7 (high security, target <200ms)".to_string(),
         ]
     }
 }

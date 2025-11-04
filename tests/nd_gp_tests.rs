@@ -1,8 +1,10 @@
 // tests/nd_gp_tests.rs
+#[allow(deprecated)]
 use ga_engine::nd::gp::make_gp_table;
 use ga_engine::nd::types::Scalar;
 
 #[test]
+#[allow(deprecated)]
 fn gp_table_2_length_and_basics() {
     let table = make_gp_table(2);
     assert_eq!(table.len(), 16);
@@ -29,6 +31,7 @@ fn gp_table_2_length_and_basics() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn gp_table_3_some_spots() {
     let table = make_gp_table(3);
     assert_eq!(table.len(), 64);

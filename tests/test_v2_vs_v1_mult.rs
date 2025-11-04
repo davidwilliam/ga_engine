@@ -4,12 +4,10 @@
 use ga_engine::clifford_fhe_v1::params::CliffordFHEParams as V1Params;
 use ga_engine::clifford_fhe_v1::keys_rns::rns_keygen as v1_keygen;
 use ga_engine::clifford_fhe_v1::ckks_rns::{rns_encrypt as v1_encrypt, rns_decrypt as v1_decrypt, RnsPlaintext as V1Plaintext};
-use ga_engine::clifford_fhe_v1::rns::RnsPolynomial as V1RnsPolynomial;
 
 use ga_engine::clifford_fhe_v2::params::CliffordFHEParams as V2Params;
 use ga_engine::clifford_fhe_v2::backends::cpu_optimized::keys::KeyContext as V2KeyContext;
 use ga_engine::clifford_fhe_v2::backends::cpu_optimized::ckks::CkksContext as V2CkksContext;
-use ga_engine::clifford_fhe_v2::backends::cpu_optimized::rns::RnsRepresentation as V2RnsRep;
 
 #[test]
 fn test_v1_vs_v2_multiplication() {

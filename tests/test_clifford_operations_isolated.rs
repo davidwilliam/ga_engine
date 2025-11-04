@@ -50,6 +50,7 @@ fn create_progress_bar(msg: &str, total_steps: u64) -> ProgressBar {
 }
 
 /// Create a progress spinner for long operations (no progress tracking)
+#[allow(dead_code)]
 fn create_spinner(msg: &str) -> ProgressBar {
     let pb = ProgressBar::new_spinner();
     pb.set_style(

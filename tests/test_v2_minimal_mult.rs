@@ -6,7 +6,7 @@ use ga_engine::clifford_fhe_v2::params::CliffordFHEParams;
 use ga_engine::clifford_fhe_v2::backends::cpu_optimized::keys::KeyContext;
 use ga_engine::clifford_fhe_v2::backends::cpu_optimized::ckks::CkksContext;
 use ga_engine::clifford_fhe_v2::backends::cpu_optimized::rns::RnsRepresentation;
-use ga_engine::clifford_fhe_v2::backends::cpu_optimized::ckks::{Plaintext, Ciphertext};
+use ga_engine::clifford_fhe_v2::backends::cpu_optimized::ckks::Plaintext;
 
 #[test]
 fn test_minimal_multiply_step_by_step() {
@@ -20,7 +20,7 @@ fn test_minimal_multiply_step_by_step() {
     println!("  Scale = {:.2e} = 2^40", params.scale);
 
     let key_ctx = KeyContext::new(params.clone());
-    let (pk, sk, evk) = key_ctx.keygen();
+    let (pk, sk, _evk) = key_ctx.keygen();
     let ckks_ctx = CkksContext::new(params.clone());
 
     // Step 1: Encrypt two constants

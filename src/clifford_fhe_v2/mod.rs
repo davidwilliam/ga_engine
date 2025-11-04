@@ -74,14 +74,18 @@ pub fn determine_best_backend() -> Backend {
 
     #[cfg(feature = "v2-cpu-optimized")]
     {
-        Backend::CpuOptimized
+        return Backend::CpuOptimized;
     }
 
     #[cfg(not(any(feature = "v2-gpu-cuda", feature = "v2-gpu-metal", feature = "v2-cpu-optimized")))]
     {
         // Fallback to V1 if no V2 backends enabled
-        Backend::V1
+        return Backend::V1;
     }
+
+    // Final fallback (if GPU features enabled but not available)
+    #[cfg(any(feature = "v2-gpu-cuda", feature = "v2-gpu-metal"))]
+    Backend::CpuOptimized
 }
 
 #[cfg(feature = "v2-gpu-cuda")]

@@ -8,7 +8,6 @@ use ga_engine::clifford_fhe_v2::backends::cpu_optimized::ckks::CkksContext;
 use ga_engine::clifford_fhe_v2::backends::cpu_optimized::rns::RnsRepresentation;
 use ga_engine::clifford_fhe_v2::backends::cpu_optimized::ckks::Plaintext;
 use ga_engine::clifford_fhe_v2::backends::cpu_optimized::multiplication::multiply_ciphertexts;
-use ga_engine::clifford_fhe_v2::backends::cpu_optimized::ntt::NttContext;
 
 #[test]
 fn test_check_relin_before_rescale() {

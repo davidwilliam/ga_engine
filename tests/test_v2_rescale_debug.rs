@@ -170,7 +170,7 @@ fn test_rescale_manually() {
     };
 
     let result_mod_qi = ((diff as u128) * (q_last_inv as u128)) % (qi_ex as u128);
-    let expected_mod_qi = (12u64 % qi_ex);
+    let expected_mod_qi = 12u64 % qi_ex;
 
     println!("  diff = (v mod qi - v_centered) mod qi = {}", diff);
     println!("  result = diff * q_last_inv mod qi = {}", result_mod_qi);
