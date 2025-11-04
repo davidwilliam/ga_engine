@@ -1057,13 +1057,6 @@ This repository contains:
 **Documentation:**
 - `README.md` - This file (complete user guide)
 - `ARCHITECTURE.md` - V1/V2 design philosophy and migration details
-- `V2_PHASE1_COMPLETE.md` - V2 Phase 1 completion summary with performance analysis
 - `BENCHMARKS.md` - Detailed V1 vs V2 benchmark results
-- `VERIFICATION.md` - Complete verification report (all tests, examples, benchmarks working)
-- `paper/` - Research publication materials (LaTeX sources)
-
-**This is the complete documentation for Clifford FHE. Everything you need to know is in this README.**
-
-**All commands to run examples and tests are documented above. ✅**
 
 For questions or issues, please open an issue on GitHub.
