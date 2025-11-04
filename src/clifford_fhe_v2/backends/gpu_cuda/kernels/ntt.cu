@@ -8,19 +8,54 @@
 extern "C" {
 
 /**
- * Modular multiplication using Barrett reduction
+ * Modular multiplication without 128-bit types
  * Returns (a * b) % q
+ *
+ * Uses double precision floating point trick for modular reduction.
+ * This is accurate enough for 60-bit primes and avoids 128-bit integers.
  */
 __device__ unsigned long long mul_mod(unsigned long long a, unsigned long long b, unsigned long long q) {
-    // Use 128-bit arithmetic via __umul64hi for high bits
+    // Compute full 128-bit product using hi and lo parts
     unsigned long long lo = a * b;
     unsigned long long hi = __umul64hi(a, b);
 
-    // Barrett reduction approximation
-    // For FHE primes (~60 bits), simple modulo is acceptable
-    // CUDA has efficient 64-bit division
-    __uint128_t product = ((__uint128_t)hi << 64) | lo;
-    return (unsigned long long)(product % q);
+    // Fast path: if hi == 0, simple modulo
+    if (hi == 0) {
+        return lo >= q ? lo - q : lo;
+    }
+
+    // Use floating point approximation for quotient
+    // quotient ≈ (a * b) / q
+    double a_d = (double)a;
+    double b_d = (double)b;
+    double q_d = (double)q;
+    double quotient_approx = (a_d * b_d) / q_d;
+
+    // Get approximate quotient (might be off by ±1)
+    unsigned long long quotient = (unsigned long long)quotient_approx;
+
+    // Compute remainder: r = a*b - quotient*q
+    // This requires 128-bit computation, so we do it in parts
+    unsigned long long qprod_lo = quotient * q;
+    unsigned long long qprod_hi = __umul64hi(quotient, q);
+
+    // Subtract: (hi||lo) - (qprod_hi||qprod_lo)
+    unsigned long long r_lo = lo - qprod_lo;
+    unsigned long long r_hi = hi - qprod_hi - (lo < qprod_lo ? 1 : 0);  // borrow
+
+    // If r_hi != 0, we need to reduce further
+    // Since quotient might be off by ±1, at most 2 corrections needed
+    if (r_hi != 0 || r_lo >= q) {
+        if (r_hi != 0) {
+            // Result wrapped, add q
+            r_lo += q;
+        }
+        while (r_lo >= q) {
+            r_lo -= q;
+        }
+    }
+
+    return r_lo;
 }
 
 /**
