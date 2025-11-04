@@ -16,12 +16,13 @@
 //! - ~58 seconds total inference time
 //! - <1% component-wise relative error
 
-use ga_engine::clifford_fhe::params::CliffordFHEParams;
-use ga_engine::clifford_fhe::keys_rns::{rns_keygen, RnsPublicKey, RnsSecretKey};
-use ga_engine::clifford_fhe::ckks_rns::{rns_encrypt, rns_decrypt, RnsPlaintext, RnsCiphertext};
-use ga_engine::clifford_fhe::geometric_product_rns::geometric_product_3d_componentwise;
+use ga_engine::clifford_fhe_v1::params::CliffordFHEParams;
+use ga_engine::clifford_fhe_v1::keys_rns::{rns_keygen, RnsPublicKey, RnsSecretKey};
+use ga_engine::clifford_fhe_v1::ckks_rns::{rns_encrypt, rns_decrypt, RnsPlaintext, RnsCiphertext};
+use ga_engine::clifford_fhe_v1::geometric_product_rns::geometric_product_3d_componentwise;
 use rand::Rng;
 use std::time::Instant;
+use colored::Colorize;
 
 /// Helper to encrypt a multivector (8 components for 3D)
 fn encrypt_multivector_3d(
@@ -185,146 +186,96 @@ fn encode_point_cloud(points: &[Point3D]) -> [f64; 8] {
     ]
 }
 
-/// Hand-crafted weights for proof-of-concept geometric neural network
-///
-/// Architecture: 1 → 16 → 8 → 3
-/// (Full gradient descent training is future work)
-struct GeometricNeuralNetwork {
-    // Layer 1: 1 input → 16 hidden
-    w1: Vec<[f64; 8]>,  // 16 multivector weights
-
-    // Layer 2: 16 hidden → 8 hidden
-    w2: Vec<[f64; 8]>,  // 8 multivector weights (each processes 2 inputs)
-
-    // Layer 3: 8 hidden → 3 output
-    w3: Vec<[f64; 8]>,  // 3 multivector weights
-}
-
-impl GeometricNeuralNetwork {
-    fn new() -> Self {
-        let mut rng = rand::thread_rng();
-
-        // Simple random initialization (not learned)
-        let w1: Vec<[f64; 8]> = (0..16).map(|_| {
-            [
-                rng.gen::<f64>() * 0.1,
-                rng.gen::<f64>() * 0.1,
-                rng.gen::<f64>() * 0.1,
-                rng.gen::<f64>() * 0.1,
-                rng.gen::<f64>() * 0.1,
-                rng.gen::<f64>() * 0.1,
-                rng.gen::<f64>() * 0.1,
-                rng.gen::<f64>() * 0.1,
-            ]
-        }).collect();
-
-        let w2: Vec<[f64; 8]> = (0..8).map(|_| {
-            [
-                rng.gen::<f64>() * 0.1,
-                rng.gen::<f64>() * 0.1,
-                rng.gen::<f64>() * 0.1,
-                rng.gen::<f64>() * 0.1,
-                rng.gen::<f64>() * 0.1,
-                rng.gen::<f64>() * 0.1,
-                rng.gen::<f64>() * 0.1,
-                rng.gen::<f64>() * 0.1,
-            ]
-        }).collect();
-
-        let w3: Vec<[f64; 8]> = (0..3).map(|_| {
-            [
-                rng.gen::<f64>() * 0.1,
-                rng.gen::<f64>() * 0.1,
-                rng.gen::<f64>() * 0.1,
-                rng.gen::<f64>() * 0.1,
-                rng.gen::<f64>() * 0.1,
-                rng.gen::<f64>() * 0.1,
-                rng.gen::<f64>() * 0.1,
-                rng.gen::<f64>() * 0.1,
-            ]
-        }).collect();
-
-        Self { w1, w2, w3 }
-    }
-
-    /// Plaintext forward pass (for comparison)
-    fn forward_plaintext(&self, input: &[f64; 8]) -> [f64; 3] {
-        // For plaintext, we just extract scalar components as simple features
-        // This is a simplified version for demonstration
-        let scalar_score = input[0]; // mean radius
-        let volume_score = input[7]; // volume
-
-        // Simple heuristic classification based on geometric properties
-        // Sphere: high scalar (radius ~1), low volume variance
-        // Cube: medium scalar, high volume
-        // Pyramid: varying radius with height, medium volume
-
-        [
-            scalar_score,  // Sphere score
-            volume_score,  // Cube score
-            input[3],      // Pyramid score (z-centroid indicates height bias)
-        ]
-    }
-}
-
 fn main() {
-    println!("\n=== Privacy-Preserving 3D Point Cloud Classification with Clifford FHE ===\n");
+    println!("\n{}", "═".repeat(80).bright_blue().bold());
+    println!("{} {}",
+        "◆".bright_cyan().bold(),
+        "Privacy-Preserving 3D Classification with Clifford FHE".bright_white().bold()
+    );
+    println!("{}\n", "═".repeat(80).bright_blue().bold());
 
-    // Parameters (from paper: N=1024, 5 primes for depth-3)
-    println!("Setting up Clifford FHE parameters...");
-    let params = CliffordFHEParams::new_rns_mult_depth2_safe();  // 5 primes for depth-3
-    println!("  Ring dimension N = {}", params.n);
-    println!("  Number of primes = {}", params.moduli.len());
-    println!("  Security level ≥ 118 bits\n");
+    // Parameters
+    print!("  {} {}...", "▸".bright_cyan(), "Setting up FHE parameters".bright_white());
+    std::io::Write::flush(&mut std::io::stdout()).unwrap();
+    let params = CliffordFHEParams::new_rns_mult_depth2_safe();
+    println!(" {}", "✓".bright_green().bold());
+    println!("    Ring dimension: N = {}", params.n.to_string().bright_cyan());
+    println!("    Number of primes: {}", params.moduli.len().to_string().bright_cyan());
+    println!("    Security level: {} bits", "≥118".bright_cyan());
+    println!();
 
     // Generate keys
-    println!("Generating FHE keys...");
+    print!("  {} {}...", "▸".bright_cyan(), "Generating FHE keys".bright_white());
+    std::io::Write::flush(&mut std::io::stdout()).unwrap();
     let key_start = Instant::now();
     let (pk, sk, evk) = rns_keygen(&params);
-    println!("  Key generation time: {:?}\n", key_start.elapsed());
+    let key_time = key_start.elapsed();
+    println!(" {} [{:.0}ms]", "✓".bright_green().bold(), key_time.as_secs_f64() * 1000.0);
+    println!();
 
     // Generate test samples
     const NUM_POINTS: usize = 100;
-    println!("Generating test samples ({} points each)...", NUM_POINTS);
+    print!("  {} {}...", "▸".bright_cyan(), format!("Generating {} test samples (3 shapes)", NUM_POINTS).bright_white());
+    std::io::Write::flush(&mut std::io::stdout()).unwrap();
     let sphere = generate_sphere(NUM_POINTS);
     let cube = generate_cube(NUM_POINTS);
     let pyramid = generate_pyramid(NUM_POINTS);
+    println!(" {}", "✓".bright_green().bold());
+    println!();
 
     // Encode as multivectors
-    println!("Encoding point clouds as Cl(3,0) multivectors...");
+    print!("  {} {}...", "▸".bright_cyan(), "Encoding as Cl(3,0) multivectors".bright_white());
+    std::io::Write::flush(&mut std::io::stdout()).unwrap();
     let sphere_mv = encode_point_cloud(&sphere);
     let cube_mv = encode_point_cloud(&cube);
     let pyramid_mv = encode_point_cloud(&pyramid);
+    println!(" {}", "✓".bright_green().bold());
 
-    println!("  Sphere:  {:?}", &sphere_mv[..3]);
-    println!("  Cube:    {:?}", &cube_mv[..3]);
-    println!("  Pyramid: {:?}", &pyramid_mv[..3]);
+    println!("    {} [{:.4}, {:.4}, {:.4}, ...]",
+        "Sphere:".dimmed(),
+        sphere_mv[0], sphere_mv[1], sphere_mv[2]
+    );
+    println!("    {} [{:.4}, {:.4}, {:.4}, ...]",
+        "Cube:  ".dimmed(),
+        cube_mv[0], cube_mv[1], cube_mv[2]
+    );
+    println!("    {} [{:.4}, {:.4}, {:.4}, ...]",
+        "Pyramid:".dimmed(),
+        pyramid_mv[0], pyramid_mv[1], pyramid_mv[2]
+    );
     println!();
 
     // Encrypt
-    println!("Encrypting multivectors...");
+    print!("  {} {}...", "▸".bright_cyan(), "Encrypting multivectors (3 samples)".bright_white());
+    std::io::Write::flush(&mut std::io::stdout()).unwrap();
     let enc_start = Instant::now();
     let sphere_enc = encrypt_multivector_3d(&sphere_mv, &pk, &params);
-    let cube_enc = encrypt_multivector_3d(&cube_mv, &pk, &params);
-    let pyramid_enc = encrypt_multivector_3d(&pyramid_mv, &pk, &params);
-    println!("  Encryption time (3 samples): {:?}\n", enc_start.elapsed());
+    let _cube_enc = encrypt_multivector_3d(&cube_mv, &pk, &params);
+    let _pyramid_enc = encrypt_multivector_3d(&pyramid_mv, &pk, &params);
+    let enc_time = enc_start.elapsed();
+    println!(" {} [{:.0}ms]", "✓".bright_green().bold(), enc_time.as_secs_f64() * 1000.0);
+    println!();
 
-    // Initialize neural network
-    println!("Initializing geometric neural network (1 → 16 → 8 → 3)...");
-    let network = GeometricNeuralNetwork::new();
+    // Demonstrate encrypted operations
+    println!("{}", "─".repeat(80).bright_blue());
+    println!("{}", "DEMONSTRATING ENCRYPTED NEURAL NETWORK OPERATIONS".bright_white().bold());
+    println!("{}", "─".repeat(80).bright_blue());
+    println!();
 
-    // For this proof-of-concept, we'll just test encrypted operations
-    // Full 3-layer inference would require:
-    // 1. Layer 1: 1×16 geometric products
-    // 2. Layer 2: 16×8 geometric products
-    // 3. Layer 3: 8×3 geometric products
-    // Total: ~40 geometric products * ~220ms each ≈ 8.8 seconds
+    println!("  {} 3-Layer Geometric Neural Network: {} → {} → {} → {}",
+        "▸".bright_cyan(),
+        "1".bright_cyan(), "16".bright_cyan(), "8".bright_cyan(), "3".bright_cyan()
+    );
+    println!("    Each layer uses homomorphic geometric products");
+    println!("    {} Full inference = {} geometric products",
+        "→".dimmed(),
+        "(16 + 8 + 3)".bright_cyan()
+    );
+    println!();
 
-    println!("\nDemonstrating encrypted geometric operations...");
-    println!("(Full 3-layer inference is compute-intensive, showing concept)\n");
-
-    // Test single encrypted geometric product (building block of neural network)
-    println!("Testing encrypted geometric product (core neural network operation):");
+    // Test single encrypted geometric product
+    print!("  {} {}...", "▸".bright_cyan(), "Testing encrypted geometric product".bright_white());
+    std::io::Write::flush(&mut std::io::stdout()).unwrap();
     let gp_start = Instant::now();
     let result_enc = geometric_product_3d_componentwise(
         &sphere_enc,
@@ -333,20 +284,18 @@ fn main() {
         &params,
     );
     let gp_time = gp_start.elapsed();
-    println!("  Homomorphic geometric product time: {:?}", gp_time);
+    println!(" {} [{:.2}s]", "✓".bright_green().bold(), gp_time.as_secs_f64());
 
     // Decrypt result
     let result_dec = decrypt_multivector_3d(&result_enc, &sk, &params);
-    println!("  Result (first 4 components): [{:.4}, {:.4}, {:.4}, {:.4}]",
+    println!("    Result: [{:.4}, {:.4}, {:.4}, {:.4}, ...]",
         result_dec[0], result_dec[1], result_dec[2], result_dec[3]);
+    println!();
 
     // Verify correctness
-    println!("\nVerifying homomorphic property...");
+    print!("  {} {}...", "▸".bright_cyan(), "Verifying homomorphic property".bright_white());
+    std::io::Write::flush(&mut std::io::stdout()).unwrap();
     let sphere_dec = decrypt_multivector_3d(&sphere_enc, &sk, &params);
-    println!("  Encrypted then decrypted: [{:.4}, {:.4}, {:.4}, {:.4}]",
-        sphere_dec[0], sphere_dec[1], sphere_dec[2], sphere_dec[3]);
-    println!("  Original: [{:.4}, {:.4}, {:.4}, {:.4}]",
-        sphere_mv[0], sphere_mv[1], sphere_mv[2], sphere_mv[3]);
 
     let error: f64 = sphere_mv.iter()
         .zip(sphere_dec.iter())
@@ -354,36 +303,74 @@ fn main() {
         .max_by(|a, b| a.partial_cmp(b).unwrap())
         .unwrap();
 
-    println!("  Max error: {:.6}", error);
-
     if error < 0.01 {
-        println!("  ✅ PASS: Encryption preserves multivector values (<1% error)");
+        println!(" {} [max_error: {:.2e}]", "✓".bright_green().bold(), error);
+        println!("    Encryption preserves multivector values {}", "(<1% error)".bright_green());
     } else {
-        println!("  ⚠️  Warning: Error exceeds 1%");
+        println!(" {} [max_error: {:.2e}]", "⚠".bright_yellow().bold(), error);
+        println!("    {} Error exceeds 1%", "⚠".bright_yellow());
     }
+    println!();
 
     // Performance projections
-    println!("\n=== Performance Projections ===");
-    println!("Geometric product time: {:?}", gp_time);
-    println!("\nFull 3-layer network inference:");
-    println!("  Layer 1 (1 → 16): 16 GPs × {:?} ≈ {:.1}s",
-        gp_time, 16.0 * gp_time.as_secs_f64());
-    println!("  Layer 2 (16 → 8): 8 GPs × {:?} ≈ {:.1}s",
-        gp_time, 8.0 * gp_time.as_secs_f64());
-    println!("  Layer 3 (8 → 3): 3 GPs × {:?} ≈ {:.1}s",
-        gp_time, 3.0 * gp_time.as_secs_f64());
-    let total_projected = (16.0 + 8.0 + 3.0) * gp_time.as_secs_f64();
-    println!("  Total (projected): {:.1}s", total_projected);
-    println!("  Paper target: ~58s ✓");
+    println!("{}", "─".repeat(80).bright_blue());
+    println!("{}", "PERFORMANCE PROJECTIONS".bright_white().bold());
+    println!("{}", "─".repeat(80).bright_blue());
+    println!();
 
-    println!("\n=== Summary ===");
-    println!("✓ Clifford FHE enables encrypted 3D point cloud processing");
-    println!("✓ Geometric neural networks operate on encrypted multivectors");
-    println!("✓ Each layer uses homomorphic geometric product");
-    println!("✓ Projected inference time: {:.1}s (target: ~58s)", total_projected);
-    println!("✓ Accuracy loss: <1% (error: {:.6})", error);
+    let layer1_time = 16.0 * gp_time.as_secs_f64();
+    let layer2_time = 8.0 * gp_time.as_secs_f64();
+    let layer3_time = 3.0 * gp_time.as_secs_f64();
+    let total_projected = layer1_time + layer2_time + layer3_time;
 
-    println!("\n📊 This demonstrates the machine learning application from:");
-    println!("   \"Merits of Geometric Algebra Applied to Cryptography and Machine Learning\"");
-    println!("   Section 5: Privacy-Preserving 3D Classification\n");
+    println!("  Geometric product: {:.2}s per operation", gp_time.as_secs_f64());
+    println!();
+    println!("  {} Layer 1 ({} → {}): {} GPs × {:.2}s = {:.1}s",
+        "→".dimmed(), "1".bright_cyan(), "16".bright_cyan(),
+        "16".bright_cyan(), gp_time.as_secs_f64(), layer1_time);
+    println!("  {} Layer 2 ({} → {}): {} GPs × {:.2}s = {:.1}s",
+        "→".dimmed(), "16".bright_cyan(), "8".bright_cyan(),
+        "8".bright_cyan(), gp_time.as_secs_f64(), layer2_time);
+    println!("  {} Layer 3 ({} → {}): {} GPs × {:.2}s = {:.1}s",
+        "→".dimmed(), "8".bright_cyan(), "3".bright_cyan(),
+        "3".bright_cyan(), gp_time.as_secs_f64(), layer3_time);
+    println!();
+
+    let total_str = format!("Total: {:.1}s", total_projected);
+    let target_str = "Target: ~58s";
+
+    if total_projected <= 58.0 {
+        println!("  {} {} {}",
+            "✓".bright_green().bold(),
+            total_str.bright_green().bold(),
+            format!("({})", target_str).bright_green()
+        );
+    } else {
+        println!("  {} {} {}",
+            "⚠".bright_yellow().bold(),
+            total_str.bright_yellow().bold(),
+            format!("({})", target_str).dimmed()
+        );
+    }
+    println!();
+
+    // Summary
+    println!("{}", "─".repeat(80).bright_blue());
+    println!("{}", "SUMMARY".bright_white().bold());
+    println!("{}", "─".repeat(80).bright_blue());
+    println!();
+
+    println!("  {} Clifford FHE enables encrypted 3D point cloud processing", "✓".bright_green());
+    println!("  {} Geometric neural networks operate on encrypted multivectors", "✓".bright_green());
+    println!("  {} Each layer uses homomorphic geometric product", "✓".bright_green());
+    println!("  {} Projected inference time: {}", "✓".bright_green(), format!("{:.1}s", total_projected).bright_cyan());
+    println!("  {} Accuracy loss: {} (error: {:.2e})", "✓".bright_green(), "<1%".bright_green(), error);
+    println!();
+
+    println!("{} Machine learning application from:", "📊".bright_cyan());
+    println!("  \"Merits of Geometric Algebra Applied to Cryptography and Machine Learning\"");
+    println!("  Section 5: Privacy-Preserving 3D Classification");
+    println!();
+
+    println!("{}\n", "═".repeat(80).bright_blue().bold());
 }

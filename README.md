@@ -321,8 +321,10 @@ ga_engine/
 │   └── [more examples...]
 │
 ├── tests/
-│   ├── test_geometric_operations.rs    # All 7 operations tested
-│   └── clifford_fhe_integration_tests.rs
+│   ├── test_geometric_operations.rs    # Comprehensive suite with progress bars
+│   ├── test_clifford_operations_isolated.rs  # Individual operation tests (9 tests)
+│   ├── clifford_fhe_integration_tests.rs    # Fast integration tests
+│   └── test_utils.rs                   # Test utility framework
 │
 ├── paper/                          # Research publications (LaTeX sources)
 │   └── [publication materials]
@@ -458,50 +460,93 @@ let params = CliffordFHEParams::new_rns_mult_depth2_safe();  // 5 primes
 
 ## Testing & Verification
 
-### Run All Tests
+### V1 Test Suites
 
+**1. Comprehensive Geometric Operations Suite**
 ```bash
-# V1 unit tests (31 tests, fast, ~1 minute)
-cargo test --lib --features v1
-
-# V1 geometric operations integration tests (slow, ~10 minutes)
+# All 7 operations with progress bars and detailed metrics (~8 minutes)
 cargo test --test test_geometric_operations --features v1 -- --nocapture
-
-# V1: All tests
-cargo test --features v1
-
-# V2: Tests (when implemented)
-cargo test --features v2-cpu-optimized
 ```
+- Tests all 7 homomorphic operations
+- Real-time progress bars with elapsed time
+- Animated spinners during long operations
+- Component-level progress tracking
+- Error metrics for each operation
 
-### Test Structure
+**2. Isolated Operation Tests**
+```bash
+# Run individual tests for clean, non-interleaved output
+cargo test --test test_clifford_operations_isolated test_key_generation --features v1 -- --nocapture
+cargo test --test test_clifford_operations_isolated test_geometric_product --features v1 -- --nocapture
+# ... (see commands in "Run Tests" section above)
+```
+- Each operation can be tested independently
+- Clean output for demos and verification
+- Step-by-step progress indicators
+- Timing information for each phase
 
-**Unit tests** (`cargo test --lib`):
+**3. Integration Tests**
+```bash
+# Fast integration tests (~1 second)
+cargo test --test clifford_fhe_integration_tests --features v1 -- --nocapture
+```
+- NTT prime validation
+- Single/multi-prime encryption
+- Homomorphic addition/multiplication
+- Noise growth tracking
+
+**4. Unit Tests**
+```bash
+# Fast unit tests (~1 minute)
+cargo test --lib --features v1
+```
 - RNS arithmetic
 - Polynomial operations
 - Key generation
 - Basic encryption/decryption
 
-**Integration tests** (`cargo test --test test_geometric_operations`):
-- All 7 homomorphic operations
-- Error verification (<10⁻⁶)
-- Level matching (ciphertext levels)
-- Scale matching
+**5. Run All Tests**
+```bash
+# Complete test suite (~15 minutes)
+cargo test --features v1
+```
 
-### Expected Test Output
+### Test Output Features
+
+All test suites include:
+- ✓ Progress bars with elapsed time
+- ✓ Color-coded pass/fail indicators
+- ✓ Unicode symbols for visual clarity
+- ✓ Animated spinners for long operations
+- ✓ Error metrics with scientific notation
+- ✓ Timing information for performance analysis
+
+### Example Test Output
 
 ```
-test test_homomorphic_geometric_product ... ok (81s)
-test test_homomorphic_reverse ... ok (0.1s)
-test test_homomorphic_rotation ... ok (81s)
-test test_homomorphic_wedge_product ... ok (81s)
-test test_homomorphic_inner_product ... ok (81s)
-test test_homomorphic_projection ... ok (115s)
-test test_homomorphic_rejection ... ok (115s)
+════════════════════════════════════════════════════════════════════════════════
+◆ Clifford FHE V1: Geometric Product (a ⊗ b)
+════════════════════════════════════════════════════════════════════════════════
 
-✅ All tests passed!
-Max errors: <10⁻⁶ (better than paper target <10⁻³)
+  ▸ Initializing FHE system... ✓
+
+  ▸ Encrypting test multivectors... ✓
+    a = (1 + 2e₁)
+    b = (3e₂)
+
+  ▸ Computing geometric product (64 multiplications)... ✓ [41.11s]
+
+  ▸ Decrypting result... ✓
+    Expected: 3e₂ + 6e₁₂
+    Got:      [0.0000, 0.0000, 3.0000, -0.0000, 6.0000, 0.0000, -0.0000, 0.0000]
+
+
+────────────────────────────────────────────────────────────────────────────────
+✓ PASS [42.07s] [max_error: 6.61e-10]
+════════════════════════════════════════════════════════════════════════════════
 ```
+
+**All tests pass with error < 10⁻⁶ (better than paper target <10⁻³)**
 
 ---
 
@@ -749,26 +794,68 @@ cargo run --example clifford_fhe_basic --release --features v1
 
 ### Run Tests
 
+#### V1 Available Tests
+
+**Comprehensive Test Suite:**
 ```bash
-# V1: Run ALL tests (unit + integration)
-#    Runtime: ~10-15 minutes
-#    Includes: 31 unit tests + 7 geometric operation tests
-cargo test --features v1
-
-# V1: Run ONLY unit tests (fast)
-#    Runtime: ~1 minute
-#    Tests: RNS arithmetic, keys, basic crypto
-cargo test --lib --features v1
-
-# V1: Run ONLY geometric operations tests (slow but critical)
-#    Runtime: ~10 minutes
-#    Tests: All 7 homomorphic operations with detailed output
+# Geometric Operations Suite (~8 minutes)
+# Tests all 7 operations with progress bars, spinners, and detailed metrics
 cargo test --test test_geometric_operations --features v1 -- --nocapture
+```
 
-# V1: Run specific test
-cargo test test_homomorphic_geometric_product --features v1 -- --nocapture
+**Isolated Operation Tests:**
+```bash
+# Individual tests for each operation (run separately for clean output)
+# Key Generation (~0.3s)
+cargo test --test test_clifford_operations_isolated test_key_generation --features v1 -- --nocapture
 
-# V2: Tests (when implemented)
+# Encryption/Decryption (~0.7s)
+cargo test --test test_clifford_operations_isolated test_encryption_decryption --features v1 -- --nocapture
+
+# Reverse (~0.7s)
+cargo test --test test_clifford_operations_isolated test_reverse --features v1 -- --nocapture
+
+# Geometric Product (~42s)
+cargo test --test test_clifford_operations_isolated test_geometric_product --features v1 -- --nocapture
+
+# Wedge Product (~83s)
+cargo test --test test_clifford_operations_isolated test_wedge_product --features v1 -- --nocapture
+
+# Inner Product (~83s)
+cargo test --test test_clifford_operations_isolated test_inner_product --features v1 -- --nocapture
+
+# Rotation (~74s)
+cargo test --test test_clifford_operations_isolated test_rotation --features v1 -- --nocapture
+
+# Projection (~116s)
+cargo test --test test_clifford_operations_isolated test_projection --features v1 -- --nocapture
+
+# Rejection (~115s)
+cargo test --test test_clifford_operations_isolated test_rejection --features v1 -- --nocapture
+```
+
+**Integration Tests:**
+```bash
+# Fast integration tests (~1s)
+# Tests: NTT primes, encryption/decryption, homomorphic ops, noise tracking
+cargo test --test clifford_fhe_integration_tests --features v1 -- --nocapture
+```
+
+**Unit Tests:**
+```bash
+# Unit tests (31 tests, ~1 minute)
+# Tests: RNS arithmetic, keys, basic cryptographic operations
+cargo test --lib --features v1
+```
+
+**All Tests:**
+```bash
+# Run everything (~15 minutes)
+cargo test --features v1
+```
+
+#### V2 Tests (when implemented)
+```bash
 cargo test --features v2-cpu-optimized
 ```
 
@@ -798,12 +885,14 @@ This repository contains:
 - `src/clifford_fhe_v2/` - V2 optimized version (active development, backend architecture)
 
 **Examples:**
-- `examples/encrypted_3d_classification.rs` - Main ML application demo
+- `examples/encrypted_3d_classification.rs` - Main ML application demo with professional output
 - `examples/clifford_fhe_basic.rs` - Basic encryption/decryption demo
 
 **Tests:**
-- `tests/test_geometric_operations.rs` - All 7 homomorphic operations ✅
-- `tests/clifford_fhe_integration_tests.rs` - Integration tests
+- `tests/test_geometric_operations.rs` - Comprehensive suite with progress bars and detailed metrics ✅
+- `tests/test_clifford_operations_isolated.rs` - Individual operation tests (9 tests) ✅
+- `tests/clifford_fhe_integration_tests.rs` - Fast integration tests ✅
+- `tests/test_utils.rs` - Test utility framework for progress bars and colored output
 - Plus 31 unit tests in V1 modules (all passing)
 
 **Source Code:**
