@@ -9,12 +9,11 @@
 
 - **What:** Privacy-preserving machine learning on 3D geometric data using FHE + geometric algebra
 - **Performance:** V2 achieves **3-4× speedup** over V1 (3.2× keygen, 4.2× encrypt, 4.4× decrypt, 2.8× multiply)
-- **Tests:** 127 tests passing in V2, all geometric operations working with <10⁻⁶ error
-- **Status:** Production-ready V2 implementation using O(n log n) NTT optimization
+- **Status:** Production-candidate V2 implementation using O(n log n) NTT optimization
 - **Accuracy:** 99% encrypted 3D classification (sphere/cube/pyramid)
 - **Get Started:** `cargo run --example encrypted_3d_classification --release --features v2`
 
-**Key Technical Achievement:** Implemented and tested multiple modular arithmetic strategies (Barrett SIMD, Montgomery SIMD, native %), discovering that LLVM-optimized native % operator outperforms manual SIMD for FHE workloads. Montgomery infrastructure (1500+ lines, production-ready) is preserved for future V3 GPU acceleration.
+**Key Technical Achievement:** Implemented and tested multiple modular arithmetic strategies (Barrett SIMD, Montgomery SIMD, native %), discovering that LLVM-optimized native % operator outperforms manual SIMD for FHE workloads. Montgomery infrastructure (1500+ lines, production-candidate) is preserved for future V3 GPU acceleration.
 
 ---
 
@@ -34,10 +33,9 @@ This repository contains **two implementations** of Clifford FHE:
 - **Performance:** 2.88s per homomorphic geometric product (4.5× faster than V1's 13s)
 - **Core Operations:** 3.2× faster keygen, 4.2× faster encryption, 4.4× faster decryption, 2.8× faster multiplication
 - **Progress:** Harvey NTT ✅ | RNS ✅ | Params ✅ | CKKS ✅ | Keys ✅ | Multiplication ✅ | GeomOps ✅
-- **Tests:** 127 tests passing (NTT, RNS, CKKS, Keys, Multiplication, Geometric operations)
 - **Optimizations:** O(n log n) NTT polynomial multiplication, LLVM-optimized modular arithmetic
 - **Use when:** Maximum performance, practical deployment, production use
-- **Characteristics:** Algorithmic improvements, highly optimized, production-ready
+- **Characteristics:** Algorithmic improvements, highly optimized, production-candidate
 
 **Quick Start:**
 ```bash
@@ -631,7 +629,7 @@ During V2 development, we implemented and tested multiple modular multiplication
 
 2. **Montgomery Multiplication with SIMD** (AVX2 4-lane, NEON 2-lane)
    - Complete CIOS algorithm with R = 2^64
-   - All infrastructure implemented (1500+ lines, 19 tests passing)
+   - All infrastructure implemented
    - Problem: Extract-scalar-pack overhead negates SIMD benefits
    - Result: No performance improvement over scalar ❌
    - Conclusion: Montgomery is hard to vectorize efficiently
@@ -658,7 +656,6 @@ During V2 development, we implemented and tested multiple modular multiplication
 - ✅ NTT-based key generation
 - ✅ Ciphertext multiplication with NTT relinearization
 - ✅ All geometric operations ported to NTT
-- ✅ 127 tests passing (NTT, RNS, CKKS, Keys, Multiplication, Geometric)
 - **Result:** 3.2× faster keygen, 4.2× faster encryption, 4.4× faster decryption, 2.8× faster multiplication
 - **Key Insight:** Native % operator with LLVM optimization outperforms manual Barrett/Montgomery SIMD
 
@@ -669,7 +666,7 @@ During V2 development, we implemented and tested multiple modular multiplication
 - ✅ Conversion functions (to_montgomery, from_montgomery)
 - ✅ SIMD backends (AVX2 4-lane, NEON 2-lane, Scalar)
 - ✅ 7 comprehensive Montgomery tests passing + 19 SIMD tests
-- **Status:** Production-ready but not used in hot path (reserved for future V3 work)
+- **Status:** Production-candidate but not used in hot path (reserved for future V3 work)
 - **Use Cases:** GPU acceleration (CUDA/Metal), specialized hardware, true vectorization
 - **Technical Note:** Extract-scalar-pack overhead negates SIMD benefits on CPU; native % is faster
 - **Files:**
@@ -1001,14 +998,14 @@ cargo test --lib clifford_fhe_v2::backends::cpu_optimized::simd --features v2 --
 ```
 
 **V2 Implementation Complete:**
-- ✅ Harvey Butterfly NTT (~650 lines, 13 tests passing including Montgomery tests)
-- ✅ Barrett Reduction & RNS (~550 lines, 21 tests passing)
-- ✅ V2 Parameter Sets (~350 lines, 8 tests passing)
-- ✅ CKKS Encryption/Decryption (~360 lines, 6 tests passing)
-- ✅ Key Generation (~470 lines, 5 tests passing)
-- ✅ Ciphertext Multiplication (~580 lines, 19 tests passing)
-- ✅ Geometric Operations (~890 lines, 36 tests passing)
-- ✅ SIMD Backends (~1500 lines, 19 tests passing including Montgomery infrastructure)
+- ✅ Harvey Butterfly NTT
+- ✅ Barrett Reduction & RNS
+- ✅ V2 Parameter Sets
+- ✅ CKKS Encryption/Decryption
+- ✅ Key Generation
+- ✅ Ciphertext Multiplication
+- ✅ Geometric Operations
+- ✅ SIMD Backends
 
 **Performance:** 3.2× faster keygen, 4.2× faster encryption, 4.4× faster decryption, 2.8× faster multiplication
 
@@ -1046,7 +1043,7 @@ This repository contains:
 - `tests/test_clifford_operations_isolated.rs` - Individual operation tests (9 tests) ✅
 - `tests/clifford_fhe_integration_tests.rs` - Fast integration tests ✅
 - `tests/test_utils.rs` - Test utility framework for progress bars and colored output
-- Plus 31 unit tests in V1 modules (all passing)
+- Plus 31 unit tests in V1 modules
 
 **Source Code:**
 - `src/clifford_fhe_v1/` - V1 baseline: Complete RNS-CKKS implementation
