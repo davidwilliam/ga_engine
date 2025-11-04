@@ -22,6 +22,9 @@ pub mod rns;
 /// V2 CKKS encryption/decryption with NTT
 pub mod ckks;
 
+/// V2 key generation with NTT
+pub mod keys;
+
 // TODO: Implement optimized geometric product
 // pub mod geometric_product;
 
