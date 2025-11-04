@@ -13,11 +13,11 @@
 
 use crate::clifford_fhe_v2::core::{BackendCapabilities, BackendInfo, CliffordFHE};
 
-// TODO: Implement optimized NTT
-// pub mod ntt;
+/// Harvey Butterfly NTT implementation - O(n log n) polynomial multiplication
+pub mod ntt;
 
-// TODO: Implement optimized RNS arithmetic
-// pub mod rns;
+/// Optimized RNS arithmetic with Barrett reduction
+pub mod rns;
 
 // TODO: Implement optimized geometric product
 // pub mod geometric_product;

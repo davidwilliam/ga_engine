@@ -3,8 +3,8 @@
 ## Design Philosophy
 
 We maintain **two parallel implementations** of Clifford FHE:
-- **V1 (Paper 1):** Research prototype, feature-complete, stable (for journal review)
-- **V2 (Crypto 2026):** Optimized implementation with NTT/GPU/SIMD (active development)
+- **V1:** Research prototype, feature-complete, stable (for journal review)
+- **V2:** Optimized implementation with NTT/GPU/SIMD (active development)
 
 This follows the **state-of-the-art pattern** used by major FHE libraries:
 - **SEAL:** Uses feature flags + versioned namespaces
@@ -15,7 +15,7 @@ This follows the **state-of-the-art pattern** used by major FHE libraries:
 
 ```
 src/
-├── clifford_fhe/           # V1 (Paper 1) - STABLE, DO NOT MODIFY
+├── clifford_fhe/           # V1 - STABLE, DO NOT MODIFY
 │   ├── mod.rs
 │   ├── ckks_rns.rs         # Basic RNS-CKKS
 │   ├── rns.rs              # Naive RNS arithmetic
@@ -24,7 +24,7 @@ src/
 │   ├── params.rs
 │   └── ... (other V1 files)
 │
-├── clifford_fhe_v2/        # V2 (Crypto 2026) - ACTIVE DEVELOPMENT
+├── clifford_fhe_v2/        # V2 - ACTIVE DEVELOPMENT
 │   ├── mod.rs
 │   ├── core/               # Core abstractions (shared traits)
 │   │   ├── mod.rs
@@ -67,8 +67,8 @@ src/
 default = ["v1"]  # Default to stable V1
 
 # Version selection (mutually exclusive)
-v1 = []           # Paper 1 implementation (stable)
-v2 = []           # Crypto 2026 implementation (development)
+v1 = []           # Stable
+v2 = []           # Optmized implementation (development)
 
 # V2 backend selection (only active when v2 is enabled)
 v2-cpu-optimized = ["v2"]     # NTT + SIMD, no GPU
@@ -82,14 +82,14 @@ v2-full = ["v2", "v2-cpu-optimized", "v2-gpu-cuda", "v2-simd-batched"]
 
 ## Usage Examples
 
-### Paper 1 (V1 - Default)
+### V1 - Default
 ```bash
 # Use stable V1 for Paper 1 validation
 cargo test --features v1
 cargo run --example encrypted_3d_classification --features v1
 ```
 
-### Crypto 2026 (V2 - Optimized)
+### V2 - Optimized
 ```bash
 # CPU-only optimized version
 cargo test --features v2-cpu-optimized
@@ -190,15 +190,15 @@ cargo bench --features v2-full -- --save-baseline crypto2026
 - ✅ Keep consistent with journal article text
 
 ### V2 (`clifford_fhe_v2/`)
-- ✅ **ACTIVE DEVELOPMENT** for Crypto 2026
+- ✅ **ACTIVE DEVELOPMENT** 
 - ✅ Aggressive optimization, breaking changes OK
 - ✅ Benchmarks required for all changes
 - ✅ Document performance improvements
 
 ## Documentation
 
-- `V1/`: Links to journal article sections
-- `V2/`: Links to Crypto 2026 README sections
+- `V1/`: Links to stable sections
+- `V2/`: Links to optmized README sections
 - Each backend documents optimization techniques
 - Benchmarks show speedup vs V1 baseline
 

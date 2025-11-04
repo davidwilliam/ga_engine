@@ -46,11 +46,11 @@
 
 pub mod backends;
 pub mod core;
+pub mod params;
 
 // TODO: Add after implementing optimized versions
 // pub mod ckks_rns;
 // pub mod keys_rns;
-// pub mod params;
 // pub mod rotation_keys;
 
 // Re-export core types
