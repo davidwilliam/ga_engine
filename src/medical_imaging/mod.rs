@@ -15,6 +15,10 @@ pub mod encrypted_inference;
 #[cfg(feature = "v2")]
 pub mod encrypted_v2_cpu;
 
+// V2 Metal GPU backend integration (requires v2-gpu-metal feature)
+#[cfg(feature = "v2-gpu-metal")]
+pub mod encrypted_metal;
+
 // Re-export commonly used types
 pub use point_cloud::{Point3D, PointCloud};
 pub use clifford_encoding::{Multivector3D, encode_point_cloud, encode_batch};
