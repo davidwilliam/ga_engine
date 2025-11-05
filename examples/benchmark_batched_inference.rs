@@ -162,9 +162,10 @@ fn main() {
     println!("\nBatching makes encrypted inference practical for clinical use!\n");
 
     println!("=== Next Steps ===");
-    println!("1. Implement encrypted batched inference on Metal GPU");
-    println!("2. Implement encrypted batched inference on CUDA GPU");
-    println!("3. Validate end-to-end: encrypt → batch → infer → decrypt");
-    println!("4. Move to real LUNA16 medical imaging dataset");
-    println!("5. Publish results (NeurIPS/ICLR)");
+    println!("1. Complete V2 Metal backend implementation (encrypt/decrypt functions)");
+    println!("2. Complete V2 CUDA backend implementation");
+    println!("3. Validate end-to-end encrypted inference: encrypt → batch → infer → decrypt");
+    println!("4. Train production model in PyTorch and export weights");
+    println!("5. Move to real LUNA16 medical imaging dataset");
+    println!("6. Publish results (NeurIPS/ICLR)");
 }
