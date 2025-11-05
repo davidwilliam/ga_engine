@@ -17,6 +17,8 @@ pub struct CudaNttContext {
     twiddles_inv: Vec<u64>,
     n_inv: u64,
     log_n: usize,
+    // Cached to avoid recompilation
+    _kernels_loaded: bool,
 }
 
 impl CudaNttContext {
@@ -29,6 +31,19 @@ impl CudaNttContext {
 
         let log_n = (n as f64).log2() as usize;
 
+        // Compile and load all kernels ONCE during initialization
+        let kernel_src = include_str!("kernels/ntt.cu");
+        let ptx = compile_ptx(kernel_src)
+            .map_err(|e| format!("Failed to compile CUDA kernel: {:?}", e))?;
+
+        device.device.load_ptx(ptx, "ntt_module", &[
+            "bit_reverse_permutation",
+            "ntt_forward",
+            "ntt_inverse",
+            "ntt_scalar_multiply",
+            "ntt_pointwise_multiply",
+        ]).map_err(|e| format!("Failed to load PTX: {:?}", e))?;
+
         Ok(CudaNttContext {
             device,
             n,
@@ -38,6 +53,7 @@ impl CudaNttContext {
             twiddles_inv,
             n_inv,
             log_n,
+            _kernels_loaded: true,
         })
     }
 
@@ -106,15 +122,7 @@ impl CudaNttContext {
         let gpu_twiddles = self.device.device.htod_copy(self.twiddles.clone())
             .map_err(|e| format!("Failed to copy twiddles: {:?}", e))?;
 
-        // Compile and load kernel
-        let kernel_src = include_str!("kernels/ntt.cu");
-        let ptx = compile_ptx(kernel_src)
-            .map_err(|e| format!("Failed to compile CUDA kernel: {:?}", e))?;
-
-        self.device.device.load_ptx(ptx, "ntt_module", &[
-            "bit_reverse_permutation",
-            "ntt_forward",
-        ]).map_err(|e| format!("Failed to load PTX: {:?}", e))?;
+        // Kernels already loaded during initialization - just get function handles
 
         // Bit-reversal permutation
         let func_bit_reverse = self.device.device.get_func("ntt_module", "bit_reverse_permutation")
@@ -164,15 +172,7 @@ impl CudaNttContext {
         let gpu_twiddles_inv = self.device.device.htod_copy(self.twiddles_inv.clone())
             .map_err(|e| format!("Failed to copy twiddles: {:?}", e))?;
 
-        // Load kernels
-        let kernel_src = include_str!("kernels/ntt.cu");
-        let ptx = compile_ptx(kernel_src)
-            .map_err(|e| format!("Failed to compile CUDA kernel: {:?}", e))?;
-
-        self.device.device.load_ptx(ptx, "ntt_module", &[
-            "ntt_inverse",
-            "ntt_scalar_multiply",
-        ]).map_err(|e| format!("Failed to load PTX: {:?}", e))?;
+        // Kernels already loaded during initialization - just get function handles
 
         // Inverse NTT stages (reverse order)
         let mut m = self.n / 2;
@@ -220,13 +220,7 @@ impl CudaNttContext {
         let mut gpu_c = self.device.device.alloc_zeros::<u64>(self.n)
             .map_err(|e| format!("Failed to allocate result: {:?}", e))?;
 
-        // Load kernel
-        let kernel_src = include_str!("kernels/ntt.cu");
-        let ptx = compile_ptx(kernel_src)
-            .map_err(|e| format!("Failed to compile CUDA kernel: {:?}", e))?;
-
-        self.device.device.load_ptx(ptx, "ntt_module", &["ntt_pointwise_multiply"])
-            .map_err(|e| format!("Failed to load PTX: {:?}", e))?;
+        // Kernels already loaded during initialization - just get function handle
 
         let func = self.device.device.get_func("ntt_module", "ntt_pointwise_multiply")
             .ok_or("Failed to get ntt_pointwise_multiply function")?;
