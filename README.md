@@ -45,6 +45,10 @@ GA Engine is designed as an extensible framework. Future additions will include:
 - **Get Started V2:** `cargo test --test test_geometric_operations_cuda --features v2-gpu-cuda -- --nocapture`
 - **Get Started V3:** `cargo run --release --features v2,v3 --example test_batching`
 
+**Applications:**
+- **Medical Imaging:** `cargo run --release --features v2,v3 --example medical_imaging_encrypted` - Encrypted deep GNN for 3D medical scan classification (HIPAA-compliant)
+- **Lattice Reduction:** `cargo run --release --example lattice_reduction_demo` - GA-accelerated cryptanalysis (rotor-based projections)
+
 **Key Technical Achievements:**
 1. **Algorithmic:** O(n log n) NTT + LLVM-optimized native % operator (4.6x speedup)
 2. **CPU Parallelization:** Rayon-based parallelization across 14 cores (6.5x additional speedup → 30x total)

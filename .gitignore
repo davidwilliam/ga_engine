@@ -27,3 +27,5 @@ paper/
 
 # Audit and analysis (security reviews, working notes)
 audit/
+# Transient documentation (planning, status updates, dev roadmaps)
+transient-docs/
