@@ -15,8 +15,10 @@ nd  = []
 # === Clifford FHE Version Selection ===
 # V1: Baseline reference implementation (stable, complete, well-tested)
 # V2: Optimized implementation (active development, performance-focused)
+# V3: Bootstrapping for unlimited depth (in development)
 v1 = []      # Baseline reference (default, stable)
 v2 = []      # Optimized version (active development)
+v3 = ["v2"]  # Bootstrapping (requires V2 as foundation)
 
 # === V2 Backend Selection (only active when v2 is enabled) ===
 v2-cpu-optimized = ["v2"]     # NTT + Rayon parallelization (30× speedup)

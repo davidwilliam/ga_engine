@@ -43,7 +43,10 @@ impl Plaintext {
         }
     }
 
-    /// Encode a vector of floats into plaintext using CKKS encoding
+    /// Encode a vector of floats into plaintext using CKKS canonical embedding
+    ///
+    /// Uses proper orbit-ordered canonical embedding to ensure Galois automorphisms
+    /// correspond to slot rotations (critical for homomorphic rotation).
     ///
     /// # Arguments
     /// * `values` - Float values to encode (length ≤ n/2 for CKKS)
@@ -63,18 +66,8 @@ impl Plaintext {
             n / 2
         );
 
-        // Scale values to fixed-point integers
-        let scaled: Vec<i64> = values
-            .iter()
-            .map(|&v| (v * scale).round() as i64)
-            .collect();
-
-        // For simplicity, put scaled values in first coefficients
-        // In production CKKS, would use FFT/IFFT for slot encoding
-        let mut coeffs_vec = vec![0i64; n];
-        for (i, &val) in scaled.iter().enumerate() {
-            coeffs_vec[i] = val;
-        }
+        // Encode using canonical embedding with orbit ordering
+        let coeffs_vec = canonical_embed_encode_real(values, scale, n);
 
         // Convert to RNS representation for each prime
         let moduli: Vec<u64> = params.moduli[..=level].to_vec();
@@ -105,13 +98,15 @@ impl Plaintext {
         Self::new(rns_coeffs, scale, level)
     }
 
-    /// Decode plaintext to vector of floats
+    /// Decode plaintext to vector of floats using canonical embedding
+    ///
+    /// Uses proper orbit-ordered canonical embedding to decode slots.
     ///
     /// # Arguments
     /// * `params` - CKKS parameters
     ///
     /// # Returns
-    /// Decoded float values
+    /// Decoded float values (N/2 slots)
     pub fn decode(&self, params: &CliffordFHEParams) -> Vec<f64> {
         // For simplicity, use the first (largest) prime for decoding
         // This avoids CRT overflow issues and is sufficient for testing
@@ -120,7 +115,7 @@ impl Plaintext {
         let q0 = params.moduli[0];
         let half_q0 = (q0 / 2) as i128;
 
-        let mut coeffs_i128 = Vec::with_capacity(self.n);
+        let mut coeffs_i64 = Vec::with_capacity(self.n);
 
         for rns_coeff in &self.coeffs {
             let val_mod_q0 = rns_coeff.values[0] as i128;
@@ -132,14 +127,11 @@ impl Plaintext {
                 val_mod_q0
             };
 
-            coeffs_i128.push(signed_val);
+            coeffs_i64.push(signed_val as i64);
         }
 
-        // Scale down to floats
-        coeffs_i128
-            .iter()
-            .map(|&c| (c as f64) / self.scale)
-            .collect()
+        // Decode using canonical embedding
+        canonical_embed_decode_real(&coeffs_i64, self.scale, self.n)
     }
 }
 
@@ -362,6 +354,38 @@ impl Ciphertext {
             .collect();
 
         Self::new(c0.clone(), self.c1.clone(), self.level, self.scale)
+    }
+
+    /// Multiply ciphertext by plaintext (homomorphic plaintext multiplication)
+    ///
+    /// This operation multiplies an encrypted value by a known plaintext value.
+    /// Unlike ciphertext-ciphertext multiplication, this does NOT require
+    /// relinearization, making it much faster and cheaper.
+    ///
+    /// **Algorithm:**
+    /// (c0, c1) * pt = (c0 * pt, c1 * pt)
+    ///
+    /// **Complexity:** O(n log n) per prime (using NTT for polynomial multiplication)
+    ///
+    /// # Arguments
+    /// * `pt` - Plaintext to multiply (must have same level)
+    ///
+    /// # Returns
+    /// New ciphertext encrypting the product
+    pub fn multiply_plain(&self, pt: &Plaintext, ckks_ctx: &CkksContext) -> Self {
+        assert_eq!(self.n, pt.n, "Dimensions must match");
+        assert_eq!(self.level, pt.level, "Levels must match for plaintext multiplication");
+
+        let moduli: Vec<u64> = ckks_ctx.params.moduli[..=self.level].to_vec();
+
+        // Multiply both c0 and c1 by plaintext using NTT
+        let new_c0 = ckks_ctx.multiply_polys_ntt(&self.c0, &pt.coeffs, &moduli);
+        let new_c1 = ckks_ctx.multiply_polys_ntt(&self.c1, &pt.coeffs, &moduli);
+
+        // Scale increases: scale' = scale * pt_scale
+        let new_scale = self.scale * pt.scale;
+
+        Self::new(new_c0, new_c1, self.level, new_scale)
     }
 
     /// Modulus switch to a target level (drop primes without rescaling)
@@ -865,4 +889,153 @@ mod tests {
                 i, decrypted_signed, original_signed, error, q);
         }
     }
+}
+
+//
+// ============================================================================
+// CKKS Canonical Embedding (Orbit-Ordered for Rotation Correctness)
+// ============================================================================
+//
+// This implements the proper canonical embedding from CKKS that ensures
+// Galois automorphisms correspond to slot rotations.
+//
+// **Critical for V3 rotation:** Simple coefficient encoding does NOT work
+// with Galois automorphisms. We need proper FFT-based slot encoding.
+//
+
+use std::f64::consts::PI;
+
+/// Compute the Galois orbit order for CKKS slot indexing
+///
+/// For power-of-two cyclotomics M=2N, the odd residues mod M form orbits
+/// under multiplication by generator g (typically g=5). This function computes
+/// the orbit starting from 1: e[t] = g^t mod M.
+///
+/// With this ordering, automorphism σ_g acts as a left rotation by 1 slot!
+///
+/// # Arguments
+/// * `n` - Ring dimension N
+/// * `g` - Generator (typically 5 for power-of-two cyclotomics)
+///
+/// # Returns
+/// Vector e where e[t] = g^t mod M for t=0..(N/2-1)
+fn orbit_order(n: usize, g: usize) -> Vec<usize> {
+    let m = 2 * n; // M = 2N
+    let num_slots = n / 2; // N/2 slots
+
+    let mut e = vec![0usize; num_slots];
+    let mut cur = 1usize;
+
+    for t in 0..num_slots {
+        e[t] = cur; // odd exponent in [1..2N-1]
+        cur = (cur * g) % m;
+    }
+
+    e
+}
+
+/// Encode real-valued slots using CKKS canonical embedding
+///
+/// Evaluates slots at the specific primitive roots ζ_M^(e[t])
+/// to ensure automorphisms correspond to slot rotations.
+///
+/// # Arguments
+/// * `values` - N/2 real values to encode (will be treated as complex with zero imaginary part)
+/// * `scale` - Scaling factor
+/// * `n` - Ring dimension (N in the formula above)
+///
+/// # Returns
+/// Polynomial coefficients (length N)
+fn canonical_embed_encode_real(values: &[f64], scale: f64, n: usize) -> Vec<i64> {
+    assert!(n.is_power_of_two());
+    let num_slots = n / 2;
+    assert!(values.len() <= num_slots);
+
+    let m = 2 * n; // Cyclotomic index M = 2N
+    let g = 5; // Generator for power-of-two cyclotomics
+
+    // Use Galois orbit order to ensure automorphism σ_g acts as rotate-by-1
+    let e = orbit_order(n, g);
+
+    // Pad values to full slot count
+    let mut slots = vec![0.0; num_slots];
+    for (i, &val) in values.iter().enumerate() {
+        slots[i] = val;
+    }
+
+    // Inverse canonical embedding (orbit-order compatible)
+    // For each coefficient j, sum over slots with both the slot value and its conjugate
+    // This handles the Hermitian symmetry required for real coefficients
+    //
+    // Formula: c[j] = (1/N) * Re( Σ_t ( z[t] * w_t(j) + conj(z[t]) * conj(w_t(j)) ) )
+    // where w_t(j) = exp(-2πi * e[t] * j / M)
+    //
+    // For real values: z[t] = conj(z[t]), so this simplifies to:
+    // c[j] = (2/N) * Re( Σ_t z[t] * w_t(j) )
+    let mut coeffs_float = vec![0.0; n];
+
+    for j in 0..n {
+        let mut sum = 0.0;
+
+        for t in 0..num_slots {
+            // w_t(j) = exp(-2πi * e[t] * j / M)
+            let angle = 2.0 * PI * (e[t] as f64) * (j as f64) / (m as f64);
+            let cos_val = angle.cos();
+
+            // For real slots: contribution is 2 * real_part(z[t] * w)
+            // = 2 * z[t] * cos(angle)
+            sum += slots[t] * cos_val;
+        }
+
+        // Normalize by 2/N (factor of 2 from Hermitian symmetry)
+        coeffs_float[j] = (2.0 / n as f64) * sum;
+    }
+
+    // Scale and round to integers
+    coeffs_float.iter().map(|&x| (x * scale).round() as i64).collect()
+}
+
+/// Decode real-valued slots using CKKS canonical embedding with orbit ordering
+///
+/// Evaluates polynomial at the orbit-ordered primitive roots ζ_M^{e[t]}.
+///
+/// This is the adjoint of canonical_embed_encode_real.
+///
+/// # Arguments
+/// * `coeffs` - Polynomial coefficients (length N)
+/// * `scale` - Scaling factor
+/// * `n` - Ring dimension
+///
+/// # Returns
+/// N/2 real slot values
+fn canonical_embed_decode_real(coeffs: &[i64], scale: f64, n: usize) -> Vec<f64> {
+    assert_eq!(coeffs.len(), n);
+
+    let m = 2 * n; // M = 2N
+    let num_slots = n / 2;
+    let g = 5; // Generator
+
+    // Use Galois orbit order
+    let e = orbit_order(n, g);
+
+    // Convert to floating point (with scale normalization)
+    let coeffs_float: Vec<f64> = coeffs.iter().map(|&c| c as f64 / scale).collect();
+
+    // Forward canonical embedding: evaluate polynomial at ζ_M^{e[t]} for t = 0..N/2-1
+    // Formula: y_t = Σ_{j=0}^{N-1} c[j] * exp(+2πi * e[t] * j / M)
+    // For real results, take real part
+    let mut slots = vec![0.0; num_slots];
+
+    for t in 0..num_slots {
+        let mut sum_real = 0.0;
+        for j in 0..n {
+            // w_t(j) = exp(+2πi * e[t] * j / M)  (note: positive angle for decode)
+            let angle = 2.0 * PI * (e[t] as f64) * (j as f64) / (m as f64);
+            let cos_val = angle.cos();
+            sum_real += coeffs_float[j] * cos_val;
+        }
+        slots[t] = sum_real;
+    }
+
+    slots
 }

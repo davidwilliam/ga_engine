@@ -7,7 +7,7 @@ use metal::*;
 
 /// Metal NTT context with precomputed twiddle factors
 pub struct MetalNttContext {
-    device: MetalDevice,
+    device: std::sync::Arc<MetalDevice>,
     pub(crate) n: usize,
     pub(crate) q: u64,
     root: u64,
@@ -17,18 +17,34 @@ pub struct MetalNttContext {
 }
 
 impl MetalNttContext {
-    /// Create new Metal NTT context
+    /// Create new Metal NTT context (creates its own device)
     ///
     /// @param n Polynomial degree (must be power of 2)
     /// @param q NTT-friendly prime (q ≡ 1 mod 2n)
     /// @param root Primitive n-th root of unity mod q
     pub fn new(n: usize, q: u64, root: u64) -> Result<Self, String> {
+        let device = MetalDevice::new()?;
+        Self::new_with_device(std::sync::Arc::new(device), n, q, root)
+    }
+
+    /// Create new Metal NTT context with existing device (RECOMMENDED)
+    ///
+    /// This avoids creating multiple Metal devices and improves performance.
+    ///
+    /// @param device Existing Metal device (wrapped in Arc for sharing)
+    /// @param n Polynomial degree (must be power of 2)
+    /// @param q NTT-friendly prime (q ≡ 1 mod 2n)
+    /// @param root Primitive n-th root of unity mod q
+    pub fn new_with_device(
+        device: std::sync::Arc<MetalDevice>,
+        n: usize,
+        q: u64,
+        root: u64,
+    ) -> Result<Self, String> {
         // Verify n is power of 2
         if n & (n - 1) != 0 {
             return Err(format!("n must be power of 2, got {}", n));
         }
-
-        let device = MetalDevice::new()?;
 
         // Precompute twiddle factors for forward NTT
         let mut twiddles = vec![0u64; n];

@@ -36,6 +36,9 @@ pub mod clifford_fhe_v1;  // V1: Baseline reference (stable, complete)
 #[cfg(feature = "v2")]
 pub mod clifford_fhe_v2;  // V2: Optimized implementation (active development)
 
+#[cfg(feature = "v3")]
+pub mod clifford_fhe_v3;  // V3: Bootstrapping for unlimited depth (in development)
+
 // Default export: V1 unless V2 is explicitly requested
 #[cfg(all(feature = "v1", not(feature = "v2")))]
 pub use clifford_fhe_v1 as clifford_fhe;

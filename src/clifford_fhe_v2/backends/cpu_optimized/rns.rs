@@ -276,6 +276,29 @@ impl RnsRepresentation {
         }
     }
 
+    /// Negates RNS representation: -a = (q - a) mod q for each component
+    ///
+    /// Used in Galois automorphisms when X^i maps to -X^j
+    pub fn negate(&self) -> Self {
+        let values = self
+            .values
+            .iter()
+            .zip(&self.moduli)
+            .map(|(&val, &q)| {
+                if val == 0 {
+                    0
+                } else {
+                    q - val
+                }
+            })
+            .collect();
+
+        Self {
+            values,
+            moduli: self.moduli.clone(),
+        }
+    }
+
     /// Multiplies two RNS representations component-wise.
     pub fn mul(&self, other: &Self) -> Self {
         assert_eq!(self.moduli, other.moduli, "Moduli must match");
