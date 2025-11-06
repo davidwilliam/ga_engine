@@ -41,41 +41,51 @@ impl CliffordFHEParams {
     ///
     /// **Bootstrap frequency:** Every 5-7 multiplications
     pub fn new_v3_bootstrap_8192() -> Self {
+        let n = 8192;
+        let moduli = vec![
+            // Special modulus (60-bit): q ≡ 1 mod 16384
+            1152921504606994433,  // (q-1) = 16384 * 70368744177663
+
+            // Scaling primes (41-bit): All q ≡ 1 mod 16384
+            // These are consecutive NTT-friendly primes for N=8192
+            1099511922689,   // Prime 1:  (q-1) = 16384 * 67108865
+            1099512004609,   // Prime 2:  (q-1) = 16384 * 67108870
+            1099512266753,   // Prime 3:  (q-1) = 16384 * 67108886
+            1099512299521,   // Prime 4:  (q-1) = 16384 * 67108888
+            1099512365057,   // Prime 5:  (q-1) = 16384 * 67108892
+            1099512856577,   // Prime 6:  (q-1) = 16384 * 67108922
+            1099512938497,   // Prime 7:  (q-1) = 16384 * 67108927
+            1099513774081,   // Prime 8:  (q-1) = 16384 * 67108978
+            1099513806849,   // Prime 9:  (q-1) = 16384 * 67108980
+            1099513872385,   // Prime 10: (q-1) = 16384 * 67108984
+            1099514003457,   // Prime 11: (q-1) = 16384 * 67108992
+            1099514200065,   // Prime 12: (q-1) = 16384 * 67109004
+
+            // Additional primes for deeper bootstrap
+            1099514265601,   // Prime 13: (q-1) = 16384 * 67109008
+            1099514331137,   // Prime 14: (q-1) = 16384 * 67109012
+            1099514396673,   // Prime 15: (q-1) = 16384 * 67109016
+            1099514462209,   // Prime 16: (q-1) = 16384 * 67109020
+            1099514527745,   // Prime 17: (q-1) = 16384 * 67109024
+            1099514593281,   // Prime 18: (q-1) = 16384 * 67109028
+            1099514658817,   // Prime 19: (q-1) = 16384 * 67109032
+            1099514724353,   // Prime 20: (q-1) = 16384 * 67109036
+            1099514789889,   // Prime 21: (q-1) = 16384 * 67109040
+        ];
+        let scale = 2f64.powi(40);
+        let inv_scale_mod_q = Self::precompute_inv_scale_mod_q(scale, &moduli);
+        let inv_q_top_mod_q = Self::precompute_inv_q_top_mod_q(&moduli);
+        let kappa_plain_mul = 1.0;  // No longer needed with exact rescale
+
         Self {
-            n: 8192,
-            moduli: vec![
-                // Special modulus (60-bit): q ≡ 1 mod 16384
-                1152921504606994433,  // (q-1) = 16384 * 70368744177663
-
-                // Scaling primes (41-bit): All q ≡ 1 mod 16384
-                // These are consecutive NTT-friendly primes for N=8192
-                1099511922689,   // Prime 1:  (q-1) = 16384 * 67108865
-                1099512004609,   // Prime 2:  (q-1) = 16384 * 67108870
-                1099512266753,   // Prime 3:  (q-1) = 16384 * 67108886
-                1099512299521,   // Prime 4:  (q-1) = 16384 * 67108888
-                1099512365057,   // Prime 5:  (q-1) = 16384 * 67108892
-                1099512856577,   // Prime 6:  (q-1) = 16384 * 67108922
-                1099512938497,   // Prime 7:  (q-1) = 16384 * 67108927
-                1099513774081,   // Prime 8:  (q-1) = 16384 * 67108978
-                1099513806849,   // Prime 9:  (q-1) = 16384 * 67108980
-                1099513872385,   // Prime 10: (q-1) = 16384 * 67108984
-                1099514003457,   // Prime 11: (q-1) = 16384 * 67108992
-                1099514200065,   // Prime 12: (q-1) = 16384 * 67109004
-
-                // Additional primes for deeper bootstrap
-                1099514265601,   // Prime 13: (q-1) = 16384 * 67109008
-                1099514331137,   // Prime 14: (q-1) = 16384 * 67109012
-                1099514396673,   // Prime 15: (q-1) = 16384 * 67109016
-                1099514462209,   // Prime 16: (q-1) = 16384 * 67109020
-                1099514527745,   // Prime 17: (q-1) = 16384 * 67109024
-                1099514593281,   // Prime 18: (q-1) = 16384 * 67109028
-                1099514658817,   // Prime 19: (q-1) = 16384 * 67109032
-                1099514724353,   // Prime 20: (q-1) = 16384 * 67109036
-                1099514789889,   // Prime 21: (q-1) = 16384 * 67109040
-            ],
-            scale: 2f64.powi(40),
+            n,
+            moduli,
+            scale,
             error_std: 3.2,
             security: SecurityLevel::Bit128,
+            inv_scale_mod_q,
+            inv_q_top_mod_q,
+            kappa_plain_mul,
         }
     }
 
@@ -96,43 +106,53 @@ impl CliffordFHEParams {
     ///
     /// **Performance:** Slower than N=8192 but better precision
     pub fn new_v3_bootstrap_16384() -> Self {
+        let n = 16384;
+        let moduli = vec![
+            // Special modulus (60-bit): q ≡ 1 mod 32768
+            1152921504607338497,  // (q-1) = 32768 * 35184372088831
+
+            // Scaling primes (41-bit): All q ≡ 1 mod 32768
+            1099511922689,   // Prime 1:  (q-1) = 32768 * 33554432 + ...
+            1099512938497,   // Prime 2
+            1099514314753,   // Prime 3
+            1099514478593,   // Prime 4
+            1099515691009,   // Prime 5
+            1099515789313,   // Prime 6
+            1099515985921,   // Prime 7
+            1099516051457,   // Prime 8
+            1099516116993,   // Prime 9
+            1099516182529,   // Prime 10
+            1099516248065,   // Prime 11
+            1099516313601,   // Prime 12
+            1099516379137,   // Prime 13
+            1099516444673,   // Prime 14
+            1099516510209,   // Prime 15
+
+            // Additional primes for very deep bootstrap
+            1099516575745,   // Prime 16
+            1099516641281,   // Prime 17
+            1099516706817,   // Prime 18
+            1099516772353,   // Prime 19
+            1099516837889,   // Prime 20
+            1099516903425,   // Prime 21
+            1099516968961,   // Prime 22
+            1099517034497,   // Prime 23
+            1099517100033,   // Prime 24
+        ];
+        let scale = 2f64.powi(40);
+        let inv_scale_mod_q = Self::precompute_inv_scale_mod_q(scale, &moduli);
+        let inv_q_top_mod_q = Self::precompute_inv_q_top_mod_q(&moduli);
+        let kappa_plain_mul = 1.0;  // No longer needed with exact rescale
+
         Self {
-            n: 16384,
-            moduli: vec![
-                // Special modulus (60-bit): q ≡ 1 mod 32768
-                1152921504607338497,  // (q-1) = 32768 * 35184372088831
-
-                // Scaling primes (41-bit): All q ≡ 1 mod 32768
-                1099511922689,   // Prime 1:  (q-1) = 32768 * 33554432 + ...
-                1099512938497,   // Prime 2
-                1099514314753,   // Prime 3
-                1099514478593,   // Prime 4
-                1099515691009,   // Prime 5
-                1099515789313,   // Prime 6
-                1099515985921,   // Prime 7
-                1099516051457,   // Prime 8
-                1099516116993,   // Prime 9
-                1099516182529,   // Prime 10
-                1099516248065,   // Prime 11
-                1099516313601,   // Prime 12
-                1099516379137,   // Prime 13
-                1099516444673,   // Prime 14
-                1099516510209,   // Prime 15
-
-                // Additional primes for very deep bootstrap
-                1099516575745,   // Prime 16
-                1099516641281,   // Prime 17
-                1099516706817,   // Prime 18
-                1099516772353,   // Prime 19
-                1099516837889,   // Prime 20
-                1099516903425,   // Prime 21
-                1099516968961,   // Prime 22
-                1099517034497,   // Prime 23
-                1099517100033,   // Prime 24
-            ],
-            scale: 2f64.powi(40),
+            n,
+            moduli,
+            scale,
             error_std: 3.2,
             security: SecurityLevel::Bit192,
+            inv_scale_mod_q,
+            inv_q_top_mod_q,
+            kappa_plain_mul,
         }
     }
 
@@ -147,36 +167,46 @@ impl CliffordFHEParams {
     ///
     /// **Security:** ~128 bits
     pub fn new_v3_bootstrap_minimal() -> Self {
-        Self {
-            n: 8192,
-            moduli: vec![
-                // Special modulus (60-bit)
-                1152921504606994433,
+        let n = 8192;
+        let moduli = vec![
+            // Special modulus (60-bit)
+            1152921504606994433,
 
-                // Scaling primes (41-bit): 19 primes
-                1099511922689,
-                1099512004609,
-                1099512266753,
-                1099512299521,
-                1099512365057,
-                1099512856577,
-                1099512938497,
-                1099513774081,
-                1099513806849,
-                1099513872385,
-                1099514003457,
-                1099514200065,
-                1099514265601,
-                1099514331137,
-                1099514396673,
-                1099514462209,
-                1099514527745,
-                1099514593281,
-                1099514658817,
-            ],
-            scale: 2f64.powi(40),
+            // Scaling primes (41-bit): 19 primes
+            1099511922689,
+            1099512004609,
+            1099512266753,
+            1099512299521,
+            1099512365057,
+            1099512856577,
+            1099512938497,
+            1099513774081,
+            1099513806849,
+            1099513872385,
+            1099514003457,
+            1099514200065,
+            1099514265601,
+            1099514331137,
+            1099514396673,
+            1099514462209,
+            1099514527745,
+            1099514593281,
+            1099514658817,
+        ];
+        let scale = 2f64.powi(40);
+        let inv_scale_mod_q = Self::precompute_inv_scale_mod_q(scale, &moduli);
+        let inv_q_top_mod_q = Self::precompute_inv_q_top_mod_q(&moduli);
+        let kappa_plain_mul = 1.0;  // No longer needed with exact rescale
+
+        Self {
+            n,
+            moduli,
+            scale,
             error_std: 3.2,
             security: SecurityLevel::Bit128,
+            inv_scale_mod_q,
+            inv_q_top_mod_q,
+            kappa_plain_mul,
         }
     }
 

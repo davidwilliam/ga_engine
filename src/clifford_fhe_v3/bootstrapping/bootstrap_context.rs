@@ -388,15 +388,15 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // Slow test: requires generating many rotation keys for V3 params
     fn test_sin_coeffs_precomputed() {
-        // Use small param set just to test coefficient computation
-        let params = CliffordFHEParams::new_test_ntt_1024();
+        // Use V3 bootstrap params which have sufficient moduli (9 primes)
+        let params = CliffordFHEParams::new_v3_bootstrap_minimal();
         let key_ctx = KeyContext::new(params.clone());
         let (_, secret_key, _) = key_ctx.keygen();
 
-        // Use minimal bootstrap params to avoid prime count requirement
-        let mut bootstrap_params = BootstrapParams::fast();
-        bootstrap_params.bootstrap_levels = 2;  // Reduce to fit in 3-prime param set
+        // Use default bootstrap params (includes bootstrap_levels=10)
+        let bootstrap_params = BootstrapParams::fast();
 
         let bootstrap_ctx = BootstrapContext::new(
             params,

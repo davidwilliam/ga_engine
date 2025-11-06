@@ -249,58 +249,29 @@ impl CliffordFHEParams {
         self.moduli.iter().all(|&q| (q - 1) % two_n == 0)
     }
 
-    /// Precompute scale inverses for all levels and primes (DEPRECATED)
-    /// Returns inv_scale_mod_q[level][prime_idx] = (scale mod q_i)^(-1) mod q_i
-    fn precompute_inv_scale_mod_q(scale: f64, moduli: &[u64]) -> Vec<Vec<u64>> {
-        let mut inv_scale_mod_q = Vec::new();
-
-        for level in 0..moduli.len() {
-            let mut level_invs = Vec::new();
-
-            for &q in &moduli[..=level] {
-                // Compute scale mod q
-                let scale_u64 = scale as u64;
-                let scale_mod_q = if scale_u64 < q {
-                    scale_u64
-                } else {
-                    (scale as u128 % q as u128) as u64
-                };
-
-                // Compute modular inverse using extended Euclidean algorithm
-                let inv = Self::mod_inverse(scale_mod_q, q)
-                    .expect("Scale must be coprime with modulus (odd primes)");
-
-                level_invs.push(inv);
-            }
-
-            inv_scale_mod_q.push(level_invs);
-        }
-
-        inv_scale_mod_q
+    /// Precompute scale inverses for all levels and primes (DEPRECATED - NOT USED)
+    ///
+    /// NOTE: This function is deprecated and returns empty vectors.
+    /// The exact BigInt rescale implementation does not require precomputed inverses.
+    /// Kept for API compatibility with existing param constructors.
+    pub fn precompute_inv_scale_mod_q(_scale: f64, moduli: &[u64]) -> Vec<Vec<u64>> {
+        // Return empty vectors for each level (not used by BigInt rescale)
+        vec![vec![]; moduli.len()]
     }
 
-    /// Precompute modulus inverses for rescale operation
-    /// Returns inv_q_top_mod_q[level-1][prime_idx] = q_level^(-1) mod q_i
-    /// For level L, compute q_L^(-1) mod q_i for all i < L
-    fn precompute_inv_q_top_mod_q(moduli: &[u64]) -> Vec<Vec<u64>> {
-        let mut inv_q_top_mod_q = Vec::new();
-
-        // For each level from 1 to max_level
-        for level in 1..moduli.len() {
-            let q_top = moduli[level];
-            let mut level_invs = Vec::new();
-
-            // Compute q_top^(-1) mod q_i for all i < level
-            for &q_i in &moduli[..level] {
-                let inv = Self::mod_inverse(q_top, q_i)
-                    .expect("Moduli must be coprime (distinct odd primes)");
-                level_invs.push(inv);
-            }
-
-            inv_q_top_mod_q.push(level_invs);
+    /// Precompute modulus inverses for rescale operation (DEPRECATED - NOT USED)
+    ///
+    /// NOTE: This function is deprecated and returns empty vectors.
+    /// The exact BigInt rescale implementation does not require precomputed inverses.
+    /// It performs CRT reconstruction and exact division instead.
+    /// Kept for API compatibility with existing param constructors.
+    pub fn precompute_inv_q_top_mod_q(moduli: &[u64]) -> Vec<Vec<u64>> {
+        // Return empty vectors for each level (not used by BigInt rescale)
+        if moduli.len() > 1 {
+            vec![vec![]; moduli.len() - 1]
+        } else {
+            vec![]
         }
-
-        inv_q_top_mod_q
     }
 
     /// Compute modular inverse using extended Euclidean algorithm

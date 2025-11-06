@@ -66,11 +66,11 @@ pub fn bootstrap_batched(
 /// # Heuristic
 ///
 /// Uses ciphertext level as proxy for noise:
-/// - Level > 2: Likely fresh, no bootstrap needed
-/// - Level ≤ 2: May be noisy, bootstrap recommended
+/// - Level >= 2: Likely fresh, no bootstrap needed
+/// - Level < 2: May be noisy, bootstrap recommended
 /// - Level = 0: Must bootstrap before next multiplication
 pub fn needs_bootstrap(batched: &BatchedMultivector) -> bool {
-    batched.ciphertext.level <= 2
+    batched.ciphertext.level < 2
 }
 
 #[cfg(test)]

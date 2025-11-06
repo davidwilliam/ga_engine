@@ -124,61 +124,44 @@ fn multiply_by_constant(
     constant: f64,
     params: &CliffordFHEParams,
 ) -> Result<Ciphertext, String> {
+    use crate::clifford_fhe_v2::backends::cpu_optimized::ckks::CkksContext;
+
     // Create plaintext with constant in all slots
     let num_slots = params.n / 2;
     let constant_vec = vec![constant; num_slots];
 
-    // Encode as plaintext
-    let pt_constant = encode_constant_plaintext(&constant_vec, params)?;
+    // Encode as plaintext at the same level as the ciphertext
+    let pt_constant = encode_constant_plaintext(&constant_vec, params, ct.level)?;
 
-    // Multiply
-    multiply_by_plaintext(ct, &pt_constant, params)
+    // Use V2's multiply_plain which properly handles rescale
+    let ckks_ctx = CkksContext::new(params.clone());
+    Ok(ct.multiply_plain(&pt_constant, &ckks_ctx))
 }
 
 /// Encode constant vector as plaintext
 fn encode_constant_plaintext(
     values: &[f64],
     params: &CliffordFHEParams,
+    level: usize,
 ) -> Result<Plaintext, String> {
-    // Similar to diagonal encoding, but all slots have same value
-    let n = params.n;
-    let scale = params.scale;
-
-    let mut coeffs = vec![0i64; n];
-
-    // Simplified encoding (TODO: proper CKKS canonical embedding)
-    for (i, &val) in values.iter().enumerate() {
-        if i < n {
-            coeffs[i] = (val * scale).round() as i64;
-        }
-    }
-
+    use crate::clifford_fhe_v2::backends::cpu_optimized::ckks::Plaintext;
     use crate::clifford_fhe_v2::backends::cpu_optimized::rns::RnsRepresentation;
 
-    // Convert coefficients to RNS representation
-    let moduli = &params.moduli[..=0]; // level 0
-    let mut rns_coeffs = Vec::with_capacity(n);
+    // Use proper V2 CKKS encoding with canonical embedding
+    let mut pt = Plaintext::encode(values, params.scale, params);
 
-    for &coeff in &coeffs {
-        let values: Vec<u64> = moduli.iter().map(|&q| {
-            if coeff >= 0 {
-                (coeff as u64) % q
-            } else {
-                let abs_val = (-coeff) as u64;
-                let remainder = abs_val % q;
-                if remainder == 0 { 0 } else { q - remainder }
-            }
-        }).collect();
-
-        rns_coeffs.push(RnsRepresentation::new(values, moduli.to_vec()));
+    // Adjust the plaintext to match the requested level
+    if level < params.max_level() {
+        // Truncate RNS representation to match the level
+        let moduli = &params.moduli[..=level];
+        for coeff in &mut pt.coeffs {
+            coeff.values.truncate(moduli.len());
+            coeff.moduli = moduli.to_vec();
+        }
+        pt.level = level;
     }
 
-    Ok(Plaintext {
-        coeffs: rns_coeffs,
-        scale,
-        n,
-        level: 0,
-    })
+    Ok(pt)
 }
 
 /// Evaluate sine polynomial homomorphically
@@ -223,6 +206,11 @@ fn eval_sine_polynomial(
     if max_degree == 0 {
         // Constant polynomial
         return multiply_by_constant(ct, sin_coeffs[0], params);
+    }
+
+    if max_degree == 1 && sin_coeffs[0].abs() < 1e-10 {
+        // Pure linear term: c₁·x
+        return multiply_by_constant(ct, sin_coeffs[1], params);
     }
 
     // Start with highest coefficient

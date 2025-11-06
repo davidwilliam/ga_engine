@@ -73,10 +73,10 @@ pub fn diagonal_mult(
     }
 
     // Encode diagonal as plaintext using V2 CKKS encoding
-    // Use scale=1.0 to avoid scale explosion (temporary until rescale_to_next is implemented)
+    // Use params.scale to match ciphertext scale (rescale is now implemented correctly)
     use crate::clifford_fhe_v2::backends::cpu_optimized::ckks::{Plaintext, CkksContext};
 
-    let mut pt_diagonal = Plaintext::encode(diagonal, 1.0, params);
+    let mut pt_diagonal = Plaintext::encode(diagonal, params.scale, params);
 
     eprintln!("DEBUG: ct.level = {}, pt_diagonal.level = {}, params.moduli.len() = {}", ct.level, pt_diagonal.level, params.moduli.len());
     eprintln!("DEBUG: ct num moduli = {}, pt num moduli = {}", ct.c0[0].moduli.len(), pt_diagonal.coeffs[0].moduli.len());
@@ -167,6 +167,14 @@ pub fn multiply_by_plaintext(
 
     use crate::clifford_fhe_v2::backends::cpu_optimized::ntt::NttContext;
     use crate::clifford_fhe_v2::backends::cpu_optimized::rns::RnsRepresentation;
+
+    // Ensure plaintext level matches ciphertext level
+    if pt.level != ct.level {
+        return Err(format!(
+            "Plaintext level {} doesn't match ciphertext level {}. Adjust plaintext level before multiplication.",
+            pt.level, ct.level
+        ));
+    }
 
     // Get active moduli for this level
     let moduli: Vec<u64> = params.moduli[..=ct.level].to_vec();

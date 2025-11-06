@@ -160,7 +160,11 @@ pub fn apply_galois_automorphism(
     n: usize,
 ) -> Vec<RnsRepresentation> {
     let two_n = 2 * n;
-    let mut result = vec![poly[0].clone(); n];  // Initialize with dummy values
+
+    // Initialize result to zero (not poly[0]!)
+    // The Galois automorphism is a permutation, so every position will be written exactly once
+    let moduli = &poly[0].moduli;
+    let mut result = vec![RnsRepresentation::new(vec![0; moduli.len()], moduli.to_vec()); n];
 
     for i in 0..n {
         // Compute new index: (g * i) mod 2N

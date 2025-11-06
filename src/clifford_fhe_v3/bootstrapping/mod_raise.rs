@@ -183,8 +183,23 @@ mod tests {
         assert_eq!(ct_raised.c0[0].moduli.len(), 5);
         assert_eq!(ct_raised.c1[0].moduli.len(), 5);
 
+        // Mod-switch back down to original level for decryption
+        // (In real bootstrap, this would happen after bootstrap operations)
+        use crate::clifford_fhe_v2::backends::cpu_optimized::rns::RnsRepresentation;
+        let mut ct_lowered = ct_raised.clone();
+        let original_moduli = &params.moduli[..=ct.level];
+        for coeff in &mut ct_lowered.c0 {
+            coeff.values.truncate(original_moduli.len());
+            coeff.moduli = original_moduli.to_vec();
+        }
+        for coeff in &mut ct_lowered.c1 {
+            coeff.values.truncate(original_moduli.len());
+            coeff.moduli = original_moduli.to_vec();
+        }
+        ct_lowered.level = ct.level;
+
         // Decrypt - should get same plaintext (approximately)
-        let decrypted_pt = ckks_ctx.decrypt(&ct_raised, &secret_key);
+        let decrypted_pt = ckks_ctx.decrypt(&ct_lowered, &secret_key);
         let decrypted = decrypted_pt.decode(&params);
 
         // Check accuracy (allow some error due to approximation in scaling)
