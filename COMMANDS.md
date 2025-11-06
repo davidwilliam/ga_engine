@@ -203,11 +203,15 @@ cargo test --release --features f64,nd,v2-gpu-cuda --no-default-features --test 
 
 ### Performance V2 CUDA
 ```bash
-# Expected performance (NVIDIA RTX 4090):
-# - Geometric product: 5.4ms (2,407x faster than V1, 82x faster than V2 CPU, 6.3x faster than Metal)
-# - Throughput: 184 operations/second
-# - Statistical analysis: 10 iterations with mean/min/max/std dev
-# - Hardware: 16,384 CUDA cores, CUDA 12.9
+# Actual performance (NVIDIA RTX 5090):
+# - Geometric product: 5.7ms mean (5ms min, 5ms max)
+# - Speedup: 2,002× vs V1 (11.42s → 5.7ms)
+# - Speedup: 77× vs V2 CPU (441ms → 5.7ms)
+# - Ratio: 0.17× vs Metal GPU (5.7ms vs 34ms, CUDA is 6× faster)
+# - Throughput: 174.8 operations/second
+# - Standard deviation: 0.08ms (1.4% CV)
+# - Statistical confidence: High (n=10 iterations)
+# - Hardware: NVIDIA GeForce RTX 5090
 ```
 
 ## V3: Bootstrapping
@@ -365,13 +369,13 @@ cargo doc --open --features v2,v3
 
 ### Performance Summary
 
-| Backend | Command | Time | Speedup |
-|---------|---------|------|---------|
-| V1 CPU | `cargo run --release --features v1 --example encrypted_3d_classification` | 13s | 1x |
-| V2 CPU | `cargo run --release --features v2 --example encrypted_3d_classification` | 441ms | 30x |
-| V2 Metal | `cargo test --release --features v2-gpu-metal --test test_geometric_operations_metal -- --nocapture` | 34ms | 387x |
-| V2 CUDA | `cargo test --release --features v2-gpu-cuda --test test_geometric_operations_cuda -- --nocapture` | 5.4ms | 2,407x |
-| V3 SIMD | `cargo run --release --features v2,v3 --example test_batching` | 0.656ms/sample | 19,817x |
+| Backend | Hardware | Time | Speedup vs V1 |
+|---------|----------|------|---------------|
+| V1 CPU | Apple M3 Max (14-core) | 11.42s | 1× |
+| V2 CPU | Apple M3 Max (14-core) | 0.30s | 38× |
+| V2 Metal | Apple M3 Max GPU | 33ms | 346× |
+| V2 CUDA | NVIDIA RTX 5090 | 5.7ms | 2,002× |
+| V3 SIMD | (projected) | 0.656ms/sample | 17,408× |
 
 ## Troubleshooting
 

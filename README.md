@@ -10,7 +10,7 @@ A production-grade Rust framework implementing the first fully homomorphic encry
 
 **GA Engine** implements **Clifford FHE**, a novel cryptographic scheme combining Ring Learning With Errors (RLWE) based fully homomorphic encryption with Clifford geometric algebra operations. This enables practical privacy-preserving machine learning on encrypted geometric data, a capability critical for medical imaging, autonomous systems, and secure spatial computing applications.
 
-The framework achieves **production-candidate performance** through systematic optimization: from baseline reference implementation (V1) to hardware-accelerated backends featuring Metal and CUDA GPU support achieving **2,407× speedup**, delivering **5.4ms** homomorphic geometric products on NVIDIA RTX 4090 architecture.
+The framework achieves **production-candidate performance** through systematic optimization: from baseline reference implementation (V1) to hardware-accelerated backends featuring Metal and CUDA GPU support achieving **2,002× speedup**, delivering **5.7ms** homomorphic geometric products on NVIDIA RTX 5090 architecture.
 
 ## Technical Achievements
 
@@ -23,11 +23,11 @@ The framework achieves **production-candidate performance** through systematic o
 ### Performance Engineering
 | Backend | Hardware | Performance | Speedup | Throughput |
 |---------|----------|-------------|---------|------------|
-| V1 Baseline | CPU | 13,000 ms | 1× | 0.08 ops/sec |
-| V2 CPU (Rayon) | 14-core Apple M3 Max | 441 ms | 30× | 2.3 ops/sec |
-| V2 Metal GPU | Apple M3 Max GPU | 34 ms | 387× | 25 ops/sec |
-| **V2 CUDA GPU** | **NVIDIA RTX 4090** | **5.4 ms** | **2,407×** | **184 ops/sec** |
-| V3 SIMD Batch | Any (512× batch) | 0.656 ms/sample | **19,817×** | 1,524 ops/sec |
+| V1 Baseline | Apple M3 Max CPU | 11,420 ms | 1× | 0.09 ops/sec |
+| V2 CPU (Rayon) | Apple M3 Max (14-core) | 300 ms | 38× | 3.3 ops/sec |
+| V2 Metal GPU | Apple M3 Max GPU | 33 ms | 346× | 30.3 ops/sec |
+| **V2 CUDA GPU** | **NVIDIA RTX 5090** | **5.7 ms** | **2,002×** | **175 ops/sec** |
+| V3 SIMD Batch | Any (512× batch) | 0.656 ms/sample | **17,408×** | 1,524 ops/sec |
 
 ### Algorithmic Optimizations
 1. **Harvey Butterfly NTT**: O(n log n) polynomial multiplication replacing O(n²) schoolbook method
@@ -49,17 +49,17 @@ The framework achieves **production-candidate performance** through systematic o
 #### **V1: Reference Baseline**
 - **Purpose**: Correctness verification, academic reproducibility, performance baseline
 - **Status**: Complete, stable, 31 unit tests passing
-- **Performance**: 13s per homomorphic geometric product
+- **Performance**: 11.42s per homomorphic geometric product
 - **Characteristics**: Straightforward implementation, comprehensive documentation, O(n²) algorithms
 
 #### **V2: Production Optimization**
 - **Purpose**: Practical deployment, multiple hardware backends, maximum single-operation performance
 - **Status**: Complete with CPU/Metal/CUDA backends, 127 unit tests passing
-- **Performance**: 5.4ms per operation (CUDA), 34ms (Metal), 441ms (CPU)
+- **Performance**: 5.7ms per operation (CUDA), 33ms (Metal), 300ms (CPU)
 - **Backends**:
   - CPU with Rayon parallelization (14-core utilization)
   - Apple Metal GPU (unified memory, runtime shader compilation)
-  - NVIDIA CUDA GPU (16,384-core parallelism, kernel caching)
+  - NVIDIA CUDA GPU (massively parallel execution, kernel caching)
 - **Optimizations**: O(n log n) NTT, Barrett reduction, SIMD-ready Montgomery infrastructure
 
 #### **V3: Unlimited Depth Computing**
@@ -83,13 +83,13 @@ All operations preserve mathematical structure under encryption with error <10�
 
 | Operation | Depth | Description | V1 Time | V2 CUDA Time | Speedup |
 |-----------|-------|-------------|---------|--------------|---------|
-| **Geometric Product** | 1 | Fundamental Clifford product: a⊗b | 13s | 5.4ms | 2,407× |
+| **Geometric Product** | 1 | Fundamental Clifford product: a⊗b | 11.42s | 5.7ms | 2,002× |
 | **Reverse** | 0 | Grade involution: ~a | <1ms | <1ms | - |
-| **Rotation** | 2 | Rotor-based rotation: R⊗v⊗~R | 26s | 11ms | 2,364× |
-| **Wedge Product** | 2 | Exterior product: a∧b = (a⊗b - b⊗a)/2 | 26s | 11ms | 2,364× |
-| **Inner Product** | 2 | Contraction: a·b = (a⊗b + b⊗a)/2 | 26s | 11ms | 2,364× |
-| **Projection** | 3 | Parallel component: proj_a(b) | 115s | 16ms | 7,188× |
-| **Rejection** | 3 | Orthogonal component: b - proj_a(b) | 115s | 16ms | 7,188× |
+| **Rotation** | 2 | Rotor-based rotation: R⊗v⊗~R | 22.8s | 11.4ms | 2,000× |
+| **Wedge Product** | 2 | Exterior product: a∧b = (a⊗b - b⊗a)/2 | 22.8s | 11.4ms | 2,000× |
+| **Inner Product** | 2 | Contraction: a·b = (a⊗b + b⊗a)/2 | 22.8s | 11.4ms | 2,000× |
+| **Projection** | 3 | Parallel component: proj_a(b) | 34.3s | 17.1ms | 2,006× |
+| **Rejection** | 3 | Orthogonal component: b - proj_a(b) | 34.3s | 17.1ms | 2,006× |
 
 **Mathematical Foundation**: Operations preserve Clifford algebra Cl(3,0) structure:
 - Basis: {1, e₁, e₂, e₃, e₁₂, e₁₃, e₂₃, e₁₂₃}

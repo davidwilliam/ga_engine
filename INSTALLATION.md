@@ -47,10 +47,10 @@ cd ga_engine
 
 ### 3. Choose Backend
 
-#### Option A: CPU Backend (Default)
+#### Option A: CPU Backend (Recommended for Local Development)
 ```bash
-cargo build --release --features v2
-cargo test --lib --features v2
+cargo build --release --features f64,nd,v2 --no-default-features
+cargo test --lib --features f64,nd,v2 --no-default-features
 ```
 
 #### Option B: Metal GPU (Apple Silicon)
@@ -59,8 +59,8 @@ cargo test --lib --features v2
 xcode-select --install
 
 # Build with Metal support
-cargo build --release --features v2-gpu-metal
-cargo test --test test_geometric_operations_metal --features v2-gpu-metal -- --nocapture
+cargo build --release --features f64,nd,v2-gpu-metal --no-default-features
+cargo test --test test_geometric_operations_metal --features f64,nd,v2-gpu-metal --no-default-features -- --nocapture
 ```
 
 #### Option C: CUDA GPU (NVIDIA)
@@ -71,43 +71,45 @@ cargo test --test test_geometric_operations_metal --features v2-gpu-metal -- --n
 # Verify CUDA installation
 nvcc --version
 
-# Set CUDA_PATH if needed
+# Set CUDA environment
 export CUDA_PATH=/usr/local/cuda
+export LD_LIBRARY_PATH=$CUDA_PATH/lib64:$LD_LIBRARY_PATH
 
 # Build with CUDA support
-cargo build --release --features v2-gpu-cuda
-cargo test --test test_geometric_operations_cuda --features v2-gpu-cuda -- --nocapture
+cargo build --release --features f64,nd,v2-gpu-cuda --no-default-features
+cargo test --test test_geometric_operations_cuda --features f64,nd,v2-gpu-cuda --no-default-features -- --nocapture
 ```
 
-#### Option D: V3 with Bootstrapping
+#### Option D: V3 with Bootstrapping (Currently Has Compilation Errors)
 ```bash
-cargo build --release --features v2,v3
-cargo test --lib --features v2,v3
+# Note: V3 needs fixes before this works
+cargo build --release --features f64,nd,v2,v3 --no-default-features
+cargo test --lib --features f64,nd,v2,v3 --no-default-features
 ```
 
 ## Verification
 
 ### Quick Test
 ```bash
-# V2 CPU (30× speedup)
-cargo run --release --features v2 --example encrypted_3d_classification
+# V2 CPU (38× speedup)
+cargo run --release --features f64,nd,v2 --no-default-features --example encrypted_3d_classification
 
-# Expected output: ~13s (V1) → ~441ms (V2 CPU)
+# Expected output: ~11.42s (V1) → ~300ms (V2 CPU)
 ```
 
 ### Full Test Suite
 ```bash
-# V1 Baseline (31 tests)
-cargo test --lib --features v1
+# V1 Baseline (67 tests)
+cargo test --lib --features f64,nd,v1 --no-default-features
 
-# V2 Optimized (127 tests)
-cargo test --lib --features v2
+# V2 Optimized (132 tests)
+cargo test --lib --features f64,nd,v2 --no-default-features
 
-# V3 Bootstrapping (100 tests)
-cargo test --lib --features v2,v3
+# V3 Bootstrapping (needs fixes)
+cargo test --lib --features f64,nd,v2,v3 --no-default-features
 
-# All versions
-cargo test --features v1,v2,v3
+# All versions with lattice reduction (requires working CMake)
+cargo test --features v1,v2,lattice-reduction
 ```
 
 ## Troubleshooting

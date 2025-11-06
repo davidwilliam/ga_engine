@@ -129,17 +129,17 @@ All benchmarks use:
 
 ## Expected Runtimes (with default sample sizes)
 
-### V1 Operations
+### V1 Operations (Actual on Apple M3 Max)
 - Key Generation: ~10s (100 samples × 48ms)
 - Encryption: ~10s (100 samples × 11ms)
 - Decryption: ~10s (100 samples × 5ms)
 - Multiplication: ~10s (100 samples × 110ms)
 - Reverse: ~1 min (50 samples × 1ms)
-- Geometric Product: ~12 min (50 samples × 13s)
-- Wedge Product: ~23 min (50 samples × 26s)
-- Inner Product: ~23 min (50 samples × 26s)
+- Geometric Product: ~10 min (50 samples × 11.42s)
+- Wedge Product: ~19 min (50 samples × 22.8s)
+- Inner Product: ~19 min (50 samples × 22.8s)
 
-**Total V1: ~57 minutes**
+**Total V1: ~50 minutes**
 
 ### V2 Operations
 - Key Generation: ~10s (100 samples × 13ms)
