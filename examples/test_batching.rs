@@ -189,7 +189,8 @@ fn main() {
     let mut test4_pass = true;
     println!("Extracted component 2 values:");
     for (i, &exp) in expected_c2.iter().enumerate() {
-        let slot_idx = i * 8;
+        // Layout A (interleaved by component): component c at positions [c, c+8, c+16, ...]
+        let slot_idx = 2 + i * 8;  // Component 2 at positions 2, 10, 18
         let error = (slots[slot_idx] - exp).abs();
         println!("  Multivector {}: {:.1} (expected {})", i, slots[slot_idx], exp);
         if error > 2.0 {
@@ -238,9 +239,9 @@ fn main() {
         let decrypted_pt = ckks_ctx.decrypt(comp_ct, &sk);
         let decoded_slots = ckks_ctx.decode(&decrypted_pt);
 
-        // Check that positions 0, 8, 16, ... contain the correct component values
+        // Layout A (interleaved by component): component c at positions [c, c+8, c+16, ...]
         for mv_idx in 0..all_comp_mvs.len() {
-            let slot_pos = mv_idx * 8;  // Component is at every 8th position
+            let slot_pos = comp_idx + mv_idx * 8;  // Component at positions comp_idx, comp_idx+8, comp_idx+16, ...
             let expected = all_comp_mvs[mv_idx][comp_idx];
             let actual = decoded_slots[slot_pos];
             let error = (actual - expected).abs();

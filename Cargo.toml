@@ -50,6 +50,7 @@ rustfft = "6.1"
 rayon = "1.8"
 rand = "0.8"
 rand_distr = "0.4"  # For Gaussian distribution sampling (FHE)
+rand_chacha = "0.3"  # For fast counter-mode RNG (key generation)
 sha3 = "0.10"  # For SHAKE128/256 (deterministic RNG)
 num-bigint = "0.4"  # For arbitrary precision integers (RNS-CKKS with large Q)
 num-traits = "0.2"  # For Zero/One traits used with BigInt

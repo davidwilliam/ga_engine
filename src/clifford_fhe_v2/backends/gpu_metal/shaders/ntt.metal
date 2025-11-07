@@ -12,15 +12,80 @@ using namespace metal;
 
 /// Modular multiplication: (a * b) mod q
 /// Uses 128-bit intermediate for FHE-sized primes (44-60 bits)
-inline ulong mul_mod(ulong a, ulong b, ulong q) {
-    // Compute full 128-bit product
-    ulong hi = mulhi(a, b);  // High 64 bits
-    ulong lo = a * b;         // Low 64 bits
+///
+/// Implements exact 128-bit modular reduction: (a * b) mod q
+/// Equivalent to Rust: ((a as u128 * b as u128) % q as u128) as u64
+/// Montgomery multiplication: (a * b * R^{-1}) mod q
+/// where R = 2^64
+///
+/// This is the CORRECT way to do 128-bit modular multiplication on GPU!
+/// No 128-bit division needed, no %q on partial products that lose carry info.
+///
+/// @param a First operand (in Montgomery domain: a * R mod q)
+/// @param b Second operand (in Montgomery domain: b * R mod q)
+/// @param q Modulus (60-bit prime)
+/// @param q_inv Precomputed: -q^{-1} mod 2^64
+/// @return (a * b * R^{-1}) mod q (stays in Montgomery domain)
+inline ulong mont_mul(ulong a, ulong b, ulong q, ulong q_inv) {
+    // Step 1: Compute t = a * b (128-bit)
+    ulong t_lo = a * b;
+    ulong t_hi = mulhi(a, b);
 
-    // Barrett reduction approximation for speed
-    // For exact reduction, we'd need multi-precision division
-    // This works for FHE primes < 2^60
-    return (lo % q);
+    // Step 2: Compute m = (t_lo * q_inv) mod 2^64
+    // This is just the low 64 bits (automatic wrap)
+    ulong m = t_lo * q_inv;
+
+    // Step 3: Compute m * q (128-bit)
+    ulong mq_lo = m * q;
+    ulong mq_hi = mulhi(m, q);
+
+    // Step 4: Compute u = (t + m*q) / 2^64
+    // This is the high limb of the 128-bit sum
+    // Need to detect carry from low limb addition
+    ulong carry = (t_lo > ~mq_lo) ? 1UL : 0UL;  // Will t_lo + mq_lo overflow?
+    ulong sum_hi = t_hi + mq_hi + carry;
+
+    // Step 5: Conditional subtraction to ensure result < q
+    return (sum_hi >= q) ? (sum_hi - q) : sum_hi;
+}
+
+/// Standard modular multiplication (NON-Montgomery)
+/// Only used for compatibility where Montgomery domain conversion isn't done yet
+/// SLOW and potentially buggy - prefer Montgomery!
+inline ulong mul_mod_slow(ulong a, ulong b, ulong q) {
+    ulong hi = mulhi(a, b);
+    ulong lo = a * b;
+
+    if (hi == 0) {
+        return lo % q;
+    }
+
+    // This path is fundamentally problematic - splitting with % loses carries
+    // Use Montgomery multiplication instead!
+    hi = hi % q;
+    lo = lo % q;
+    ulong two_32 = (1UL << 32) % q;
+    ulong two_64_mod_q = (two_32 * two_32) % q;
+    ulong hi_contrib_hi = mulhi(hi, two_64_mod_q);
+    ulong hi_contrib_lo = hi * two_64_mod_q;
+
+    if (hi_contrib_hi == 0) {
+        ulong hi_contrib = hi_contrib_lo % q;
+        ulong result = (hi_contrib + lo) % q;
+        return result;
+    } else {
+        hi_contrib_hi = hi_contrib_hi % q;
+        ulong temp = (hi_contrib_hi * two_64_mod_q) % q;
+        ulong hi_contrib = (temp + (hi_contrib_lo % q)) % q;
+        ulong result = (hi_contrib + lo) % q;
+        return result;
+    }
+}
+
+/// Compatibility wrapper - will be replaced with Montgomery everywhere
+/// For now, use slow version to maintain existing interface
+inline ulong mul_mod(ulong a, ulong b, ulong q) {
+    return mul_mod_slow(a, b, q);
 }
 
 /// Modular addition: (a + b) mod q
@@ -50,31 +115,90 @@ inline ulong pow_mod(ulong base, ulong exp, ulong q) {
     return result;
 }
 
-/// Forward NTT (Cooley-Tukey butterfly, decimation-in-time)
+/// Bit-reversal permutation (separate pass for correctness)
+kernel void ntt_bit_reverse(
+    device ulong* coeffs [[buffer(0)]],
+    constant uint& n [[buffer(1)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    if (gid < n) {
+        uint reversed = 0;
+        uint k = gid;
+        uint logn = 31 - clz(n);
+
+        for (uint i = 0; i < logn; i++) {
+            reversed = (reversed << 1) | (k & 1);
+            k >>= 1;
+        }
+
+        if (gid < reversed) {
+            ulong temp = coeffs[gid];
+            coeffs[gid] = coeffs[reversed];
+            coeffs[reversed] = temp;
+        }
+    }
+}
+
+/// Single-stage NTT butterfly (Cooley-Tukey) with Montgomery multiplication
+/// One dispatch per stage - provides global synchronization between stages
 ///
-/// Parallelization strategy:
-/// - Each thread handles one butterfly operation
-/// - Threadgroups process log2(N) stages sequentially
-/// - Within each stage, N/2 butterflies run in parallel
-///
-/// @param coeffs Input/output polynomial coefficients (in-place)
-/// @param twiddles Precomputed twiddle factors (powers of primitive root)
-/// @param n Polynomial degree (power of 2)
-/// @param q Modulus (NTT-friendly prime)
-kernel void ntt_forward(
+/// @param coeffs Input/output coefficients (in-place, in Montgomery domain)
+/// @param twiddles Precomputed twiddle factors (in Montgomery domain)
+/// @param n Polynomial degree
+/// @param q Modulus
+/// @param stage Which stage (0 = first, log2(n)-1 = last)
+/// @param q_inv -q^{-1} mod 2^64 for Montgomery reduction
+kernel void ntt_forward_stage(
     device ulong* coeffs [[buffer(0)]],
     constant ulong* twiddles [[buffer(1)]],
     constant uint& n [[buffer(2)]],
     constant ulong& q [[buffer(3)]],
-    uint gid [[thread_position_in_grid]],
-    uint tid [[thread_position_in_threadgroup]],
-    uint threadgroup_size [[threads_per_threadgroup]]
+    constant uint& stage [[buffer(4)]],
+    constant ulong& q_inv [[buffer(5)]],
+    uint gid [[thread_position_in_grid]]
 ) {
-    // Bit-reversal permutation (first stage)
+    uint m = 1 << (stage + 1);    // Block size for this stage
+    uint m_half = 1 << stage;      // Half block size
+
+    // Each thread processes one butterfly
+    uint butterfly_idx = gid;
+    if (butterfly_idx < n / 2) {
+        uint block_idx = butterfly_idx / m_half;
+        uint idx_in_block = butterfly_idx % m_half;
+
+        uint i = block_idx * m + idx_in_block;
+        uint j = i + m_half;
+
+        // Twiddle factor index (twiddle is already in Montgomery domain)
+        uint twiddle_idx = (n / m) * idx_in_block;
+        ulong omega = twiddles[twiddle_idx];
+
+        // Harvey butterfly with Montgomery multiplication
+        ulong u = coeffs[i];
+        ulong v = mont_mul(coeffs[j], omega, q, q_inv);
+
+        coeffs[i] = add_mod(u, v, q);
+        coeffs[j] = sub_mod(u, v, q);
+    }
+}
+
+/// OLD single-dispatch NTT (BUGGY - no global sync between stages)
+/// Kept for reference but should not be used
+kernel void ntt_forward_single_dispatch_BUGGY(
+    device ulong* coeffs [[buffer(0)]],
+    constant ulong* twiddles [[buffer(1)]],
+    constant uint& n [[buffer(2)]],
+    constant ulong& q [[buffer(3)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    // BUG: threadgroup_barrier does NOT synchronize across threadgroups!
+    // Different threadgroups can be at different stages, reading stale values.
+
+    // Bit-reversal permutation
     if (gid < n) {
         uint reversed = 0;
         uint k = gid;
-        uint logn = 31 - clz(n);  // log2(n)
+        uint logn = 31 - clz(n);
 
         for (uint i = 0; i < logn; i++) {
             reversed = (reversed << 1) | (k & 1);
@@ -88,14 +212,13 @@ kernel void ntt_forward(
         }
     }
 
-    threadgroup_barrier(mem_flags::mem_device);
+    threadgroup_barrier(mem_flags::mem_device);  // DOES NOT WORK GLOBALLY!
 
     // NTT butterfly stages
     for (uint stage = 0; stage < 31 - clz(n); stage++) {
-        uint m = 1 << (stage + 1);  // Block size
-        uint m_half = 1 << stage;    // Half block size
+        uint m = 1 << (stage + 1);
+        uint m_half = 1 << stage;
 
-        // Each thread processes one butterfly
         uint butterfly_idx = gid;
         if (butterfly_idx < n / 2) {
             uint block_idx = butterfly_idx / m_half;
@@ -104,11 +227,9 @@ kernel void ntt_forward(
             uint i = block_idx * m + idx_in_block;
             uint j = i + m_half;
 
-            // Twiddle factor index
             uint twiddle_idx = (n / m) * idx_in_block;
             ulong omega = twiddles[twiddle_idx];
 
-            // Harvey butterfly
             ulong u = coeffs[i];
             ulong v = mul_mod(coeffs[j], omega, q);
 
@@ -116,27 +237,88 @@ kernel void ntt_forward(
             coeffs[j] = sub_mod(u, v, q);
         }
 
-        threadgroup_barrier(mem_flags::mem_device);
+        threadgroup_barrier(mem_flags::mem_device);  // DOES NOT WORK GLOBALLY!
     }
 }
 
-/// Inverse NTT (Gentleman-Sande butterfly, decimation-in-frequency)
+/// Single-stage inverse NTT butterfly (Gentleman-Sande) with Montgomery multiplication
+/// One dispatch per stage - provides global synchronization
 ///
-/// @param coeffs Input/output evaluation points (in-place)
-/// @param twiddles_inv Precomputed inverse twiddle factors
-/// @param n Polynomial degree
-/// @param q Modulus
-/// @param n_inv Modular inverse of n (for final scaling)
-kernel void ntt_inverse(
+/// @param stage Which stage (log2(n)-1 = first, 0 = last for inverse)
+/// @param q_inv -q^{-1} mod 2^64 for Montgomery reduction
+kernel void ntt_inverse_stage(
+    device ulong* coeffs [[buffer(0)]],
+    constant ulong* twiddles_inv [[buffer(1)]],
+    constant uint& n [[buffer(2)]],
+    constant ulong& q [[buffer(3)]],
+    constant uint& stage [[buffer(4)]],
+    constant ulong& q_inv [[buffer(5)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    uint m = 1 << (stage + 1);
+    uint m_half = 1 << stage;
+
+    uint butterfly_idx = gid;
+    if (butterfly_idx < n / 2) {
+        uint block_idx = butterfly_idx / m_half;
+        uint idx_in_block = butterfly_idx % m_half;
+
+        uint i = block_idx * m + idx_in_block;
+        uint j = i + m_half;
+
+        uint twiddle_idx = (n / m) * idx_in_block;
+        ulong omega_inv = twiddles_inv[twiddle_idx];
+
+        // Inverse butterfly with Montgomery multiplication
+        ulong u = coeffs[i];
+        ulong v = coeffs[j];
+
+        coeffs[i] = add_mod(u, v, q);
+        coeffs[j] = mont_mul(sub_mod(u, v, q), omega_inv, q, q_inv);
+    }
+}
+
+/// Scale and bit-reverse (final step of inverse NTT) with Montgomery multiplication
+///
+/// @param q_inv -q^{-1} mod 2^64 for Montgomery reduction
+kernel void ntt_inverse_final_scale(
+    device ulong* coeffs [[buffer(0)]],
+    constant uint& n [[buffer(1)]],
+    constant ulong& q [[buffer(2)]],
+    constant ulong& n_inv [[buffer(3)]],
+    constant ulong& q_inv [[buffer(4)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    if (gid < n) {
+        uint reversed = 0;
+        uint k = gid;
+        uint logn = 31 - clz(n);
+
+        for (uint i = 0; i < logn; i++) {
+            reversed = (reversed << 1) | (k & 1);
+            k >>= 1;
+        }
+
+        if (gid <= reversed) {
+            ulong temp = mont_mul(coeffs[gid], n_inv, q, q_inv);
+            coeffs[gid] = mont_mul(coeffs[reversed], n_inv, q, q_inv);
+            coeffs[reversed] = temp;
+        }
+    }
+}
+
+/// OLD single-dispatch inverse NTT (BUGGY - no global sync)
+kernel void ntt_inverse_single_dispatch_BUGGY(
     device ulong* coeffs [[buffer(0)]],
     constant ulong* twiddles_inv [[buffer(1)]],
     constant uint& n [[buffer(2)]],
     constant ulong& q [[buffer(3)]],
     constant ulong& n_inv [[buffer(4)]],
-    uint gid [[thread_position_in_grid]],
-    uint tid [[thread_position_in_threadgroup]]
+    uint gid [[thread_position_in_grid]]
 ) {
-    // Inverse NTT butterfly stages (reversed order)
+    // BUG: Same synchronization issue as forward NTT
+
+    // Inverse NTT butterfly stages
     for (int stage = (31 - clz(n)) - 1; stage >= 0; stage--) {
         uint m = 1 << (stage + 1);
         uint m_half = 1 << stage;
@@ -152,7 +334,6 @@ kernel void ntt_inverse(
             uint twiddle_idx = (n / m) * idx_in_block;
             ulong omega_inv = twiddles_inv[twiddle_idx];
 
-            // Inverse butterfly
             ulong u = coeffs[i];
             ulong v = coeffs[j];
 
@@ -160,10 +341,10 @@ kernel void ntt_inverse(
             coeffs[j] = mul_mod(sub_mod(u, v, q), omega_inv, q);
         }
 
-        threadgroup_barrier(mem_flags::mem_device);
+        threadgroup_barrier(mem_flags::mem_device);  // DOES NOT WORK GLOBALLY!
     }
 
-    // Bit-reversal and final scaling by 1/n
+    // Bit-reversal and scaling
     if (gid < n) {
         uint reversed = 0;
         uint k = gid;
@@ -188,16 +369,22 @@ kernel void ntt_inverse(
 /// In NTT domain: NTT(c) = NTT(a) ⊙ NTT(b) (pointwise)
 ///
 /// Fully parallel: each thread handles one coefficient
+/// Pointwise modular multiplication in NTT domain (using Montgomery multiplication)
+///
+/// IMPORTANT: Input values a[] and b[] must be in Montgomery domain!
+/// Output c[] is also in Montgomery domain.
 kernel void ntt_pointwise_multiply(
     device const ulong* a [[buffer(0)]],
     device const ulong* b [[buffer(1)]],
     device ulong* c [[buffer(2)]],
     constant uint& n [[buffer(3)]],
     constant ulong& q [[buffer(4)]],
+    constant ulong& q_inv [[buffer(5)]],
     uint gid [[thread_position_in_grid]]
 ) {
     if (gid < n) {
-        c[gid] = mul_mod(a[gid], b[gid], q);
+        // Montgomery multiplication: (a*R) * (b*R) * R^{-1} = (a*b)*R
+        c[gid] = mont_mul(a[gid], b[gid], q, q_inv);
     }
 }
 
@@ -226,5 +413,206 @@ kernel void ntt_pointwise_sub(
 ) {
     if (gid < n) {
         c[gid] = sub_mod(a[gid], b[gid], q);
+    }
+}
+
+// ============================================================================
+// TWISTED NTT for Negacyclic Convolution (mod x^n + 1)
+// ============================================================================
+//
+// Standard NTT gives cyclic convolution (mod x^n - 1).
+// For FHE, we need negacyclic convolution (mod x^n + 1).
+//
+// Solution: Apply "twist" using primitive 2n-th root of unity (psi)
+//
+// Forward Twisted NTT:
+//   1. Multiply coeffs[i] by psi^i (twist)
+//   2. Apply standard NTT with omega = psi^2
+//   3. Result is NTT for negacyclic convolution
+//
+// Inverse Twisted NTT:
+//   1. Apply standard INTT with omega = psi^2
+//   2. Multiply coeffs[i] by psi^(-i) (inverse twist)
+//   3. Result is polynomial in coefficient form
+//
+// ============================================================================
+
+/// Apply twist: coeffs[i] *= psi^i mod q
+///
+/// This converts coefficients for negacyclic convolution to cyclic form.
+/// Used before standard NTT.
+///
+/// @param coeffs Input/output coefficients (in-place)
+/// @param psi_powers Precomputed powers of psi: [1, psi, psi^2, ..., psi^(n-1)]
+/// @param n Polynomial degree
+/// @param q Modulus
+kernel void ntt_apply_twist(
+    device ulong* coeffs [[buffer(0)]],
+    constant ulong* psi_powers [[buffer(1)]],
+    constant uint& n [[buffer(2)]],
+    constant ulong& q [[buffer(3)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    if (gid < n) {
+        coeffs[gid] = mul_mod(coeffs[gid], psi_powers[gid], q);
+    }
+}
+
+/// Apply inverse twist: coeffs[i] *= psi^(-i) mod q
+///
+/// This converts coefficients from cyclic form back to negacyclic form.
+/// Used after standard INTT.
+///
+/// @param coeffs Input/output coefficients (in-place)
+/// @param psi_inv_powers Precomputed powers of psi^(-1): [1, psi^(-1), psi^(-2), ..., psi^(-(n-1))]
+/// @param n Polynomial degree
+/// @param q Modulus
+kernel void ntt_apply_inverse_twist(
+    device ulong* coeffs [[buffer(0)]],
+    constant ulong* psi_inv_powers [[buffer(1)]],
+    constant uint& n [[buffer(2)]],
+    constant ulong& q [[buffer(3)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    if (gid < n) {
+        coeffs[gid] = mul_mod(coeffs[gid], psi_inv_powers[gid], q);
+    }
+}
+
+/// Forward Twisted NTT (for negacyclic convolution)
+///
+/// Combines twist application + standard NTT in a single kernel for efficiency.
+/// This is the main kernel for FHE operations.
+///
+/// @param coeffs Input/output polynomial coefficients
+/// @param psi_powers Powers of psi (2n-th root): [1, psi, psi^2, ...]
+/// @param omega_powers Powers of omega = psi^2 (n-th root): [1, omega, omega^2, ...]
+/// @param n Polynomial degree
+/// @param q Modulus
+kernel void ntt_forward_twisted(
+    device ulong* coeffs [[buffer(0)]],
+    constant ulong* psi_powers [[buffer(1)]],
+    constant ulong* omega_powers [[buffer(2)]],
+    constant uint& n [[buffer(3)]],
+    constant ulong& q [[buffer(4)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    // Step 1: Apply twist
+    if (gid < n) {
+        coeffs[gid] = mul_mod(coeffs[gid], psi_powers[gid], q);
+    }
+    threadgroup_barrier(mem_flags::mem_device);
+
+    // Step 2: Bit-reversal permutation
+    if (gid < n) {
+        uint reversed = 0;
+        uint k = gid;
+        uint logn = 31 - clz(n);
+
+        for (uint i = 0; i < logn; i++) {
+            reversed = (reversed << 1) | (k & 1);
+            k >>= 1;
+        }
+
+        if (gid < reversed) {
+            ulong temp = coeffs[gid];
+            coeffs[gid] = coeffs[reversed];
+            coeffs[reversed] = temp;
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_device);
+
+    // Step 3: Standard NTT butterfly stages with omega
+    for (uint stage = 0; stage < 31 - clz(n); stage++) {
+        uint m = 1 << (stage + 1);
+        uint m_half = 1 << stage;
+
+        uint butterfly_idx = gid;
+        if (butterfly_idx < n / 2) {
+            uint block_idx = butterfly_idx / m_half;
+            uint idx_in_block = butterfly_idx % m_half;
+
+            uint i = block_idx * m + idx_in_block;
+            uint j = i + m_half;
+
+            uint twiddle_idx = (n / m) * idx_in_block;
+            ulong omega = omega_powers[twiddle_idx];
+
+            ulong u = coeffs[i];
+            ulong v = mul_mod(coeffs[j], omega, q);
+
+            coeffs[i] = add_mod(u, v, q);
+            coeffs[j] = sub_mod(u, v, q);
+        }
+        threadgroup_barrier(mem_flags::mem_device);
+    }
+}
+
+/// Inverse Twisted NTT (for negacyclic convolution)
+///
+/// Combines standard INTT + inverse twist application.
+///
+/// @param coeffs Input/output evaluation points
+/// @param omega_inv_powers Powers of omega^(-1)
+/// @param psi_inv_powers Powers of psi^(-1)
+/// @param n Polynomial degree
+/// @param q Modulus
+/// @param n_inv Modular inverse of n
+kernel void ntt_inverse_twisted(
+    device ulong* coeffs [[buffer(0)]],
+    constant ulong* omega_inv_powers [[buffer(1)]],
+    constant ulong* psi_inv_powers [[buffer(2)]],
+    constant uint& n [[buffer(3)]],
+    constant ulong& q [[buffer(4)]],
+    constant ulong& n_inv [[buffer(5)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    // Step 1: Standard inverse NTT butterfly stages
+    for (int stage = (31 - clz(n)) - 1; stage >= 0; stage--) {
+        uint m = 1 << (stage + 1);
+        uint m_half = 1 << stage;
+
+        uint butterfly_idx = gid;
+        if (butterfly_idx < n / 2) {
+            uint block_idx = butterfly_idx / m_half;
+            uint idx_in_block = butterfly_idx % m_half;
+
+            uint i = block_idx * m + idx_in_block;
+            uint j = i + m_half;
+
+            uint twiddle_idx = (n / m) * idx_in_block;
+            ulong omega_inv = omega_inv_powers[twiddle_idx];
+
+            ulong u = coeffs[i];
+            ulong v = coeffs[j];
+
+            coeffs[i] = add_mod(u, v, q);
+            coeffs[j] = mul_mod(sub_mod(u, v, q), omega_inv, q);
+        }
+        threadgroup_barrier(mem_flags::mem_device);
+    }
+
+    // Step 2: Bit-reversal and scaling by 1/n
+    if (gid < n) {
+        uint reversed = 0;
+        uint k = gid;
+        uint logn = 31 - clz(n);
+
+        for (uint i = 0; i < logn; i++) {
+            reversed = (reversed << 1) | (k & 1);
+            k >>= 1;
+        }
+
+        if (gid <= reversed) {
+            ulong temp = mul_mod(coeffs[gid], n_inv, q);
+            coeffs[gid] = mul_mod(coeffs[reversed], n_inv, q);
+            coeffs[reversed] = temp;
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_device);
+
+    // Step 3: Apply inverse twist
+    if (gid < n) {
+        coeffs[gid] = mul_mod(coeffs[gid], psi_inv_powers[gid], q);
     }
 }

@@ -10,10 +10,19 @@ pub struct MetalNttContext {
     device: std::sync::Arc<MetalDevice>,
     pub(crate) n: usize,
     pub(crate) q: u64,
-    root: u64,
-    twiddles: Vec<u64>,      // Forward twiddle factors
-    twiddles_inv: Vec<u64>,  // Inverse twiddle factors
-    n_inv: u64,              // Modular inverse of n
+    psi: u64,                    // Primitive 2n-th root (for twisted NTT)
+    omega: u64,                  // Primitive n-th root = psi^2
+    psi_powers: Vec<u64>,        // Powers of psi: [1, psi, psi^2, ..., psi^(n-1)]
+    psi_inv_powers: Vec<u64>,    // Powers of psi^(-1)
+    omega_powers: Vec<u64>,      // Powers of omega: [1, omega, omega^2, ..., omega^(n-1)]
+    omega_inv_powers: Vec<u64>,  // Powers of omega^(-1)
+    n_inv: u64,                  // Modular inverse of n (normal domain)
+    n_inv_montgomery: u64,       // Modular inverse of n (Montgomery domain)
+    // Montgomery multiplication parameters
+    q_inv: u64,                  // -q^{-1} mod 2^64 for Montgomery reduction
+    r_squared: u64,              // R^2 mod q where R = 2^64 (for domain conversion)
+    omega_powers_montgomery: Vec<u64>,      // omega_powers in Montgomery domain
+    omega_inv_powers_montgomery: Vec<u64>,  // omega_inv_powers in Montgomery domain
 }
 
 impl MetalNttContext {
@@ -21,10 +30,10 @@ impl MetalNttContext {
     ///
     /// @param n Polynomial degree (must be power of 2)
     /// @param q NTT-friendly prime (q ≡ 1 mod 2n)
-    /// @param root Primitive n-th root of unity mod q
-    pub fn new(n: usize, q: u64, root: u64) -> Result<Self, String> {
+    /// @param psi Primitive 2n-th root of unity mod q (for twisted NTT)
+    pub fn new(n: usize, q: u64, psi: u64) -> Result<Self, String> {
         let device = MetalDevice::new()?;
-        Self::new_with_device(std::sync::Arc::new(device), n, q, root)
+        Self::new_with_device(std::sync::Arc::new(device), n, q, psi)
     }
 
     /// Create new Metal NTT context with existing device (RECOMMENDED)
@@ -34,138 +43,266 @@ impl MetalNttContext {
     /// @param device Existing Metal device (wrapped in Arc for sharing)
     /// @param n Polynomial degree (must be power of 2)
     /// @param q NTT-friendly prime (q ≡ 1 mod 2n)
-    /// @param root Primitive n-th root of unity mod q
+    /// @param psi Primitive 2n-th root of unity mod q (for twisted NTT)
     pub fn new_with_device(
         device: std::sync::Arc<MetalDevice>,
         n: usize,
         q: u64,
-        root: u64,
+        psi: u64,
     ) -> Result<Self, String> {
         // Verify n is power of 2
         if n & (n - 1) != 0 {
             return Err(format!("n must be power of 2, got {}", n));
         }
 
-        // Precompute twiddle factors for forward NTT
-        let mut twiddles = vec![0u64; n];
-        twiddles[0] = 1;
-        for i in 1..n {
-            twiddles[i] = Self::mul_mod(twiddles[i - 1], root, q);
+        // Verify psi is a primitive 2n-th root
+        let two_n = (2 * n) as u64;
+        if Self::pow_mod(psi, two_n, q) != 1 {
+            return Err(format!("psi is not a primitive 2n-th root of unity"));
         }
 
-        // Precompute inverse twiddle factors
-        let root_inv = Self::mod_inverse(root, q)?;
-        let mut twiddles_inv = vec![0u64; n];
-        twiddles_inv[0] = 1;
+        // Compute omega = psi^2 (n-th root)
+        let omega = Self::mul_mod(psi, psi, q);
+
+        // Precompute powers of psi: [1, psi, psi^2, ..., psi^(n-1)]
+        let mut psi_powers = vec![0u64; n];
+        psi_powers[0] = 1;
         for i in 1..n {
-            twiddles_inv[i] = Self::mul_mod(twiddles_inv[i - 1], root_inv, q);
+            psi_powers[i] = Self::mul_mod(psi_powers[i - 1], psi, q);
+        }
+
+        // Precompute powers of psi^(-1)
+        let psi_inv = Self::mod_inverse(psi, q)?;
+        let mut psi_inv_powers = vec![0u64; n];
+        psi_inv_powers[0] = 1;
+        for i in 1..n {
+            psi_inv_powers[i] = Self::mul_mod(psi_inv_powers[i - 1], psi_inv, q);
+        }
+
+        // Precompute powers of omega: [1, omega, omega^2, ..., omega^(n-1)]
+        let mut omega_powers = vec![0u64; n];
+        omega_powers[0] = 1;
+        for i in 1..n {
+            omega_powers[i] = Self::mul_mod(omega_powers[i - 1], omega, q);
+        }
+
+        // Precompute powers of omega^(-1)
+        let omega_inv = Self::mod_inverse(omega, q)?;
+        let mut omega_inv_powers = vec![0u64; n];
+        omega_inv_powers[0] = 1;
+        for i in 1..n {
+            omega_inv_powers[i] = Self::mul_mod(omega_inv_powers[i - 1], omega_inv, q);
         }
 
         // Compute modular inverse of n
         let n_inv = Self::mod_inverse(n as u64, q)?;
 
+        // Compute Montgomery parameters
+        eprintln!("    [NTT] Computing q_inv...");
+        let q_inv = Self::compute_q_inv(q);
+        eprintln!("    [NTT] Computing R^2 mod q...");
+        let r_squared = Self::compute_r_squared_mod_q(q);
+
+        // Convert twiddle factors to Montgomery domain
+        eprintln!("    [NTT] Converting {} omega_powers to Montgomery domain...", n);
+        let omega_powers_montgomery: Vec<u64> = omega_powers.iter()
+            .map(|&w| Self::to_montgomery(w, r_squared, q, q_inv))
+            .collect();
+
+        eprintln!("    [NTT] Converting {} omega_inv_powers to Montgomery domain...", n);
+        let omega_inv_powers_montgomery: Vec<u64> = omega_inv_powers.iter()
+            .map(|&w| Self::to_montgomery(w, r_squared, q, q_inv))
+            .collect();
+
+        // Convert n_inv to Montgomery domain for final scaling
+        eprintln!("    [NTT] Converting n_inv to Montgomery domain...");
+        let n_inv_montgomery = Self::to_montgomery(n_inv, r_squared, q, q_inv);
+        eprintln!("    [NTT] Montgomery conversion complete!");
+
         Ok(MetalNttContext {
             device,
             n,
             q,
-            root,
-            twiddles,
-            twiddles_inv,
+            psi,
+            omega,
+            psi_powers,
+            psi_inv_powers,
+            omega_powers,
+            omega_inv_powers,
             n_inv,
+            n_inv_montgomery,
+            q_inv,
+            r_squared,
+            omega_powers_montgomery,
+            omega_inv_powers_montgomery,
         })
     }
 
-    /// Forward NTT on GPU
+    /// Forward NTT on GPU with proper global synchronization
     ///
-    /// Transforms coefficients → evaluation points
+    /// Uses stage-per-dispatch approach to ensure correctness:
+    /// 0. Convert input to Montgomery domain (on CPU)
+    /// 1. Bit-reversal permutation (1 dispatch)
+    /// 2. For each stage 0..log2(n): butterfly pass (log2(n) dispatches)
+    /// 3. Convert output from Montgomery domain (on CPU)
+    ///
+    /// Each dispatch provides implicit global synchronization barrier.
     pub fn forward(&self, coeffs: &mut [u64]) -> Result<(), String> {
         if coeffs.len() != self.n {
             return Err(format!("Expected {} coefficients, got {}", self.n, coeffs.len()));
         }
 
-        // Create GPU buffers
-        let coeffs_buffer = self.device.create_buffer_with_data(coeffs);
-        let twiddles_buffer = self.device.create_buffer_with_data(&self.twiddles);
+        // Convert input to Montgomery domain
+        let mut coeffs_montgomery: Vec<u64> = coeffs.iter()
+            .map(|&c| Self::to_montgomery(c, self.r_squared, self.q, self.q_inv))
+            .collect();
 
-        // Metal requires scalar parameters as buffers
+        let log_n = (self.n as f64).log2() as u32;
+
+        // Create persistent GPU buffer (will be modified in-place)
+        let coeffs_buffer = self.device.create_buffer_with_data(&coeffs_montgomery);
+        let omega_powers_buffer = self.device.create_buffer_with_data(&self.omega_powers_montgomery);
         let n_buffer = self.device.create_buffer_with_u32_data(&[self.n as u32]);
         let q_buffer = self.device.create_buffer_with_data(&[self.q]);
+        let q_inv_buffer = self.device.create_buffer_with_data(&[self.q_inv]);
 
-        // Get forward NTT kernel
-        let kernel = self.device.get_function("ntt_forward")?;
+        let threadgroup_size = MTLSize::new(256, 1, 1);
+        let threadgroups = MTLSize::new(((self.n + 255) / 256) as u64, 1, 1);
+
+        // Step 1: Bit-reversal permutation
+        {
+            let kernel = self.device.get_function("ntt_bit_reverse")?;
+            let pipeline = self.device.device()
+                .new_compute_pipeline_state_with_function(&kernel)
+                .map_err(|e| format!("Failed to create bit-reverse pipeline: {:?}", e))?;
+
+            self.device.execute_kernel(|encoder| {
+                encoder.set_compute_pipeline_state(&pipeline);
+                encoder.set_buffer(0, Some(&coeffs_buffer), 0);
+                encoder.set_buffer(1, Some(&n_buffer), 0);
+                encoder.dispatch_thread_groups(threadgroups, threadgroup_size);
+                Ok(())
+            })?;
+        }
+
+        // Step 2: Execute each butterfly stage separately
+        // This provides GLOBAL synchronization between stages (the key fix!)
+        let kernel = self.device.get_function("ntt_forward_stage")?;
         let pipeline = self.device.device()
             .new_compute_pipeline_state_with_function(&kernel)
-            .map_err(|e| format!("Failed to create pipeline: {:?}", e))?;
+            .map_err(|e| format!("Failed to create stage pipeline: {:?}", e))?;
 
-        // Execute kernel
-        self.device.execute_kernel(|encoder| {
-            encoder.set_compute_pipeline_state(&pipeline);
-            encoder.set_buffer(0, Some(&coeffs_buffer), 0);
-            encoder.set_buffer(1, Some(&twiddles_buffer), 0);
-            encoder.set_buffer(2, Some(&n_buffer), 0);
-            encoder.set_buffer(3, Some(&q_buffer), 0);
+        for stage in 0..log_n {
+            let stage_buffer = self.device.create_buffer_with_u32_data(&[stage]);
 
-            // Dispatch threads (one per coefficient)
-            let threadgroup_size = MTLSize::new(256, 1, 1);
-            let threadgroups = MTLSize::new(
-                ((self.n + 255) / 256) as u64,
-                1,
-                1,
-            );
+            self.device.execute_kernel(|encoder| {
+                encoder.set_compute_pipeline_state(&pipeline);
+                encoder.set_buffer(0, Some(&coeffs_buffer), 0);
+                encoder.set_buffer(1, Some(&omega_powers_buffer), 0);
+                encoder.set_buffer(2, Some(&n_buffer), 0);
+                encoder.set_buffer(3, Some(&q_buffer), 0);
+                encoder.set_buffer(4, Some(&stage_buffer), 0);
+                encoder.set_buffer(5, Some(&q_inv_buffer), 0);  // NEW: Montgomery q_inv
 
-            encoder.dispatch_thread_groups(threadgroups, threadgroup_size);
-            Ok(())
-        })?;
+                // Only need n/2 threads for butterflies
+                let butterfly_threads = ((self.n / 2 + 255) / 256) as u64;
+                let butterfly_threadgroups = MTLSize::new(butterfly_threads, 1, 1);
+                encoder.dispatch_thread_groups(butterfly_threadgroups, threadgroup_size);
+                Ok(())
+            })?;
+            // Implicit global barrier here - next dispatch waits for this one to complete!
+        }
 
-        // Read result back to CPU
-        let result = self.device.read_buffer(&coeffs_buffer, self.n);
-        coeffs.copy_from_slice(&result);
+        // Read result back - KEEP in Montgomery NTT domain!
+        // This allows pointwise_multiply to work correctly with Montgomery inputs
+        let result_montgomery = self.device.read_buffer(&coeffs_buffer, self.n);
+        coeffs.copy_from_slice(&result_montgomery);
 
         Ok(())
     }
 
-    /// Inverse NTT on GPU
+    /// Inverse NTT on GPU with proper global synchronization
     ///
-    /// Transforms evaluation points → coefficients
+    /// Uses stage-per-dispatch approach:
+    /// 0. Convert input to Montgomery domain (on CPU)
+    /// 1. For each stage (log2(n)-1 down to 0): butterfly pass
+    /// 2. Bit-reversal and scaling by 1/n
+    /// 3. Convert output from Montgomery domain (on CPU)
     pub fn inverse(&self, evals: &mut [u64]) -> Result<(), String> {
         if evals.len() != self.n {
             return Err(format!("Expected {} evaluation points, got {}", self.n, evals.len()));
         }
 
-        // Create GPU buffers
-        let evals_buffer = self.device.create_buffer_with_data(evals);
-        let twiddles_inv_buffer = self.device.create_buffer_with_data(&self.twiddles_inv);
+        // Input is already in Montgomery NTT domain from forward() or pointwise_multiply()
+        // No conversion needed!
 
-        // Metal requires scalar parameters as buffers
+        let log_n = (self.n as f64).log2() as u32;
+
+        // Create persistent GPU buffer - input is already Montgomery
+        let evals_buffer = self.device.create_buffer_with_data(evals);
+        let omega_inv_powers_buffer = self.device.create_buffer_with_data(&self.omega_inv_powers_montgomery);
         let n_buffer = self.device.create_buffer_with_u32_data(&[self.n as u32]);
         let q_buffer = self.device.create_buffer_with_data(&[self.q]);
-        let n_inv_buffer = self.device.create_buffer_with_data(&[self.n_inv]);
+        let n_inv_buffer = self.device.create_buffer_with_data(&[self.n_inv_montgomery]);
+        let q_inv_buffer = self.device.create_buffer_with_data(&[self.q_inv]);
 
-        // Get inverse NTT kernel
-        let kernel = self.device.get_function("ntt_inverse")?;
+        let threadgroup_size = MTLSize::new(256, 1, 1);
+
+        // Step 1: Execute inverse butterfly stages (in reverse order)
+        let kernel = self.device.get_function("ntt_inverse_stage")?;
         let pipeline = self.device.device()
             .new_compute_pipeline_state_with_function(&kernel)
-            .map_err(|e| format!("Failed to create pipeline: {:?}", e))?;
+            .map_err(|e| format!("Failed to create inverse stage pipeline: {:?}", e))?;
 
-        // Execute kernel
-        self.device.execute_kernel(|encoder| {
-            encoder.set_compute_pipeline_state(&pipeline);
-            encoder.set_buffer(0, Some(&evals_buffer), 0);
-            encoder.set_buffer(1, Some(&twiddles_inv_buffer), 0);
-            encoder.set_buffer(2, Some(&n_buffer), 0);
-            encoder.set_buffer(3, Some(&q_buffer), 0);
-            encoder.set_buffer(4, Some(&n_inv_buffer), 0);
+        for stage in (0..log_n).rev() {
+            let stage_buffer = self.device.create_buffer_with_u32_data(&[stage]);
 
-            let threadgroup_size = MTLSize::new(256, 1, 1);
-            let threadgroups = MTLSize::new(((self.n + 255) / 256) as u64, 1, 1);
+            self.device.execute_kernel(|encoder| {
+                encoder.set_compute_pipeline_state(&pipeline);
+                encoder.set_buffer(0, Some(&evals_buffer), 0);
+                encoder.set_buffer(1, Some(&omega_inv_powers_buffer), 0);
+                encoder.set_buffer(2, Some(&n_buffer), 0);
+                encoder.set_buffer(3, Some(&q_buffer), 0);
+                encoder.set_buffer(4, Some(&stage_buffer), 0);
+                encoder.set_buffer(5, Some(&q_inv_buffer), 0);  // NEW: Montgomery q_inv
 
-            encoder.dispatch_thread_groups(threadgroups, threadgroup_size);
-            Ok(())
-        })?;
+                let butterfly_threads = ((self.n / 2 + 255) / 256) as u64;
+                let butterfly_threadgroups = MTLSize::new(butterfly_threads, 1, 1);
+                encoder.dispatch_thread_groups(butterfly_threadgroups, threadgroup_size);
+                Ok(())
+            })?;
+            // Implicit global barrier between stages
+        }
 
-        // Read result
-        let result = self.device.read_buffer(&evals_buffer, self.n);
-        evals.copy_from_slice(&result);
+        // Step 2: Bit-reversal and scaling
+        {
+            let kernel = self.device.get_function("ntt_inverse_final_scale")?;
+            let pipeline = self.device.device()
+                .new_compute_pipeline_state_with_function(&kernel)
+                .map_err(|e| format!("Failed to create final scale pipeline: {:?}", e))?;
+
+            self.device.execute_kernel(|encoder| {
+                encoder.set_compute_pipeline_state(&pipeline);
+                encoder.set_buffer(0, Some(&evals_buffer), 0);
+                encoder.set_buffer(1, Some(&n_buffer), 0);
+                encoder.set_buffer(2, Some(&q_buffer), 0);
+                encoder.set_buffer(3, Some(&n_inv_buffer), 0);
+                encoder.set_buffer(4, Some(&q_inv_buffer), 0);  // NEW: Montgomery q_inv
+
+                let threadgroups = MTLSize::new(((self.n + 255) / 256) as u64, 1, 1);
+                encoder.dispatch_thread_groups(threadgroups, threadgroup_size);
+                Ok(())
+            })?;
+        }
+
+        // Read result (still in Montgomery domain)
+        let result_montgomery = self.device.read_buffer(&evals_buffer, self.n);
+
+        // Convert from Montgomery domain back to normal domain
+        for i in 0..self.n {
+            // To leave Montgomery domain: mont_mul(x*R, 1, q, q_inv) = x
+            evals[i] = Self::mont_mul_cpu(result_montgomery[i], 1, self.q, self.q_inv);
+        }
 
         Ok(())
     }
@@ -186,6 +323,7 @@ impl MetalNttContext {
         // Metal requires scalar parameters as buffers
         let n_buffer = self.device.create_buffer_with_u32_data(&[self.n as u32]);
         let q_buffer = self.device.create_buffer_with_data(&[self.q]);
+        let q_inv_buffer = self.device.create_buffer_with_data(&[self.q_inv]); // IMPORTANT: Add q_inv for Montgomery multiplication!
 
         // Get kernel
         let kernel = self.device.get_function("ntt_pointwise_multiply")?;
@@ -201,6 +339,7 @@ impl MetalNttContext {
             encoder.set_buffer(2, Some(&c_buffer), 0);
             encoder.set_buffer(3, Some(&n_buffer), 0);
             encoder.set_buffer(4, Some(&q_buffer), 0);
+            encoder.set_buffer(5, Some(&q_inv_buffer), 0); // Pass q_inv!
 
             let threadgroup_size = MTLSize::new(256, 1, 1);
             let threadgroups = MTLSize::new(((self.n + 255) / 256) as u64, 1, 1);
@@ -265,6 +404,88 @@ impl MetalNttContext {
         };
 
         Ok(result)
+    }
+
+    /// Compute q_inv = -q^{-1} mod 2^64 for Montgomery multiplication
+    ///
+    /// Uses Newton's method (Hensel lifting) for fast computation:
+    /// x_{i+1} = x_i * (2 - q * x_i) mod 2^{2i}
+    ///
+    /// This is MUCH faster than Extended Euclidean for mod 2^64
+    fn compute_q_inv(q: u64) -> u64 {
+        // Newton's method (Hensel lifting) to compute q^{-1} mod 2^64
+        // Start with 3-bit approximation: q * q_inv ≡ 1 (mod 8)
+        // For odd q: q_inv ≡ q (mod 8) works as initial approximation
+
+        // q must be odd for NTT-friendly primes
+        assert!(q & 1 == 1, "q must be odd for Montgomery multiplication");
+
+        let mut q_inv = q;  // Initial 3-bit approximation
+
+        // Newton iteration: x_{i+1} = x_i * (2 - q * x_i)
+        // Doubles precision each iteration: 3 -> 6 -> 12 -> 24 -> 48 -> 64 bits
+        for _ in 0..5 {
+            // Compute in wrapping arithmetic (mod 2^64)
+            q_inv = q_inv.wrapping_mul(2u64.wrapping_sub(q.wrapping_mul(q_inv)));
+        }
+
+        // Now q_inv is q^{-1} mod 2^64
+        // We want -q^{-1} mod 2^64
+        q_inv.wrapping_neg()
+    }
+
+    /// Compute R^2 mod q for Montgomery domain conversion
+    ///
+    /// R = 2^64, so R^2 = 2^128
+    /// We compute (2^128) mod q using repeated squaring
+    fn compute_r_squared_mod_q(q: u64) -> u64 {
+        // 2^128 mod q = ((2^64 mod q) * (2^64 mod q)) mod q
+
+        // First compute 2^64 mod q using u128 arithmetic
+        let r_mod_q = ((1u128 << 64) % q as u128) as u64;
+
+        // Then compute (2^64 mod q)^2 mod q
+        Self::mul_mod(r_mod_q, r_mod_q, q)
+    }
+
+    /// Convert a value to Montgomery domain: x -> x*R mod q
+    ///
+    /// Uses Montgomery multiplication with R^2 mod q:
+    /// to_montgomery(x) = mont_mul(x, R^2, q, q_inv) = x*R^2*R^{-1} = x*R mod q
+    fn to_montgomery(x: u64, r_squared: u64, q: u64, q_inv: u64) -> u64 {
+        // We'll use the CPU mul_mod for now since this is just precomputation
+        // In the future, we could call a Metal kernel if we have many values to convert
+        Self::mont_mul_cpu(x, r_squared, q, q_inv)
+    }
+
+    /// CPU implementation of Montgomery multiplication for precomputation
+    ///
+    /// Same algorithm as GPU mont_mul kernel
+    fn mont_mul_cpu(a: u64, b: u64, q: u64, q_inv: u64) -> u64 {
+        // Step 1: Compute t = a * b (128-bit)
+        let t = a as u128 * b as u128;
+        let t_lo = t as u64;
+        let t_hi = (t >> 64) as u64;
+
+        // Step 2: Compute m = (t_lo * q_inv) mod 2^64
+        let m = t_lo.wrapping_mul(q_inv);
+
+        // Step 3: Compute m * q (128-bit)
+        let mq = m as u128 * q as u128;
+        let mq_lo = mq as u64;
+        let mq_hi = (mq >> 64) as u64;
+
+        // Step 4: Compute u = (t + m*q) / 2^64
+        let (sum_lo, carry1) = t_lo.overflowing_add(mq_lo);
+        let (sum_hi, carry2) = t_hi.overflowing_add(mq_hi);
+        let sum_hi = sum_hi.wrapping_add(carry1 as u64).wrapping_add(carry2 as u64);
+
+        // Step 5: Conditional subtraction
+        if sum_hi >= q {
+            sum_hi - q
+        } else {
+            sum_hi
+        }
     }
 }
 

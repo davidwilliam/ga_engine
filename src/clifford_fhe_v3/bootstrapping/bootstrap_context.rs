@@ -81,7 +81,7 @@ impl BootstrapParams {
     ///
     /// Returns error if parameters are invalid:
     /// - sin_degree must be odd and >= 5
-    /// - bootstrap_levels must be >= 10
+    /// - bootstrap_levels must be >= 5 (10+ recommended for production)
     /// - target_precision must be > 0
     pub fn validate(&self) -> Result<(), String> {
         if self.sin_degree < 5 {
@@ -90,8 +90,12 @@ impl BootstrapParams {
         if self.sin_degree % 2 == 0 {
             return Err(format!("sin_degree must be odd, got {}", self.sin_degree));
         }
+        if self.bootstrap_levels < 5 {
+            return Err(format!("bootstrap_levels must be >= 5, got {}", self.bootstrap_levels));
+        }
         if self.bootstrap_levels < 10 {
-            return Err(format!("bootstrap_levels must be >= 10, got {}", self.bootstrap_levels));
+            println!("  [WARNING] bootstrap_levels={} is below recommended minimum of 10", self.bootstrap_levels);
+            println!("            Bootstrap may have reduced precision - OK for demos, NOT for production");
         }
         if self.target_precision <= 0.0 {
             return Err(format!("target_precision must be > 0, got {}", self.target_precision));
@@ -168,14 +172,24 @@ impl BootstrapContext {
         bootstrap_params.validate()?;
 
         // Verify FHE parameters have sufficient primes
-        let required_primes = bootstrap_params.bootstrap_levels + 3;  // +3 for computation
+        // For production: bootstrap_levels + 3 for computation
+        // For demos: bootstrap_levels + 1 minimum (at least 1 computation level)
+        let min_computation_levels = if bootstrap_params.bootstrap_levels >= 10 { 3 } else { 1 };
+        let required_primes = bootstrap_params.bootstrap_levels + min_computation_levels;
+
         if params.moduli.len() < required_primes {
             return Err(format!(
-                "FHE parameters have {} primes, but {} required for bootstrap (bootstrap_levels={} + 3)",
+                "FHE parameters have {} primes, but {} required for bootstrap (bootstrap_levels={} + {})",
                 params.moduli.len(),
                 required_primes,
-                bootstrap_params.bootstrap_levels
+                bootstrap_params.bootstrap_levels,
+                min_computation_levels
             ));
+        }
+
+        let actual_computation_levels = params.moduli.len() - bootstrap_params.bootstrap_levels - 1;
+        if actual_computation_levels < 3 && bootstrap_params.bootstrap_levels >= 10 {
+            println!("  [WARNING] Only {} computation levels available (3+ recommended)", actual_computation_levels);
         }
 
         println!("Creating bootstrap context:");
@@ -279,16 +293,13 @@ impl BootstrapContext {
         // Use V3 mod_raise function
         use super::mod_raise::mod_raise;
 
-        // Determine target moduli (add bootstrap_levels primes)
-        let current_level = ct.level;
-        let target_level = current_level + self.bootstrap_params.bootstrap_levels;
+        // ModRaise: Restore ciphertext to use ALL available primes
+        // This gives maximum working room for bootstrap operations
+        let target_level = self.params.moduli.len() - 1;  // Highest level (use all primes)
 
-        if target_level >= self.params.moduli.len() {
-            return Err(format!(
-                "Cannot raise to level {} (only {} primes available)",
-                target_level,
-                self.params.moduli.len()
-            ));
+        if ct.level >= target_level {
+            // Already at maximum level, no need to raise
+            return Ok(ct.clone());
         }
 
         let target_moduli = &self.params.moduli[0..=target_level];

@@ -11,8 +11,61 @@ use crate::clifford_fhe_v2::backends::cpu_optimized::ntt::NttContext;
 use crate::clifford_fhe_v2::backends::cpu_optimized::rns::{BarrettReducer, RnsRepresentation};
 use crate::clifford_fhe_v2::params::CliffordFHEParams;
 use rand::distributions::Distribution;
-use rand::{thread_rng, Rng};
+use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha20Rng;
 use rand_distr::Normal;
+use rayon::prelude::*;
+use std::cell::RefCell;
+
+// Thread-local buffers and RNG for key generation
+thread_local! {
+    static KEYGEN_BUFFERS: RefCell<KeygenBuffers> = RefCell::new(KeygenBuffers::new());
+    static THREAD_RNG: RefCell<ChaCha20Rng> = RefCell::new({
+        // Create thread-specific seed using thread ID
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let thread_id = COUNTER.fetch_add(1, Ordering::Relaxed);
+
+        // Mix with system entropy for security
+        use rand::thread_rng as sys_rng;
+        use rand::RngCore;
+        let mut seed = [0u8; 32];
+        sys_rng().fill_bytes(&mut seed[0..24]);
+        seed[24..32].copy_from_slice(&thread_id.to_le_bytes());
+
+        ChaCha20Rng::from_seed(seed)
+    });
+}
+
+/// Preallocated buffers for key generation operations
+struct KeygenBuffers {
+    /// Temporary buffer for polynomial coefficients (per-prime)
+    tmp_poly_a: Vec<u64>,
+    tmp_poly_b: Vec<u64>,
+    tmp_result: Vec<u64>,
+    /// Size parameters (to detect when resize is needed)
+    current_n: usize,
+}
+
+impl KeygenBuffers {
+    fn new() -> Self {
+        Self {
+            tmp_poly_a: Vec::new(),
+            tmp_poly_b: Vec::new(),
+            tmp_result: Vec::new(),
+            current_n: 0,
+        }
+    }
+
+    fn ensure_capacity(&mut self, n: usize) {
+        if self.current_n != n {
+            self.tmp_poly_a.resize(n, 0);
+            self.tmp_poly_b.resize(n, 0);
+            self.tmp_result.resize(n, 0);
+            self.current_n = n;
+        }
+    }
+}
 
 /// V2 Secret Key
 #[derive(Clone, Debug)]
@@ -36,40 +89,45 @@ impl SecretKey {
     }
 
     /// Sample ternary secret key: coefficients in {-1, 0, 1}
+    /// Uses fast thread-local ChaCha20 RNG for performance
     pub fn sample_ternary(params: &CliffordFHEParams) -> Self {
         let n = params.n;
         let level = params.max_level();
         let moduli: Vec<u64> = params.moduli[..=level].to_vec();
 
-        let mut rng = thread_rng();
-        let mut coeffs = Vec::with_capacity(n);
+        let coeffs = THREAD_RNG.with(|rng| {
+            let mut rng = rng.borrow_mut();
+            let mut coeffs = Vec::with_capacity(n);
 
-        for _ in 0..n {
-            // Sample from {-1, 0, 1} with equal probability
-            let val: f64 = rng.gen();
-            let ternary = if val < 0.33 {
-                -1i64
-            } else if val < 0.66 {
-                0i64
-            } else {
-                1i64
-            };
+            for _ in 0..n {
+                // Sample from {-1, 0, 1} with equal probability
+                let val: f64 = rng.gen();
+                let ternary = if val < 0.33 {
+                    -1i64
+                } else if val < 0.66 {
+                    0i64
+                } else {
+                    1i64
+                };
 
-            // Convert to RNS representation
-            let rns_values: Vec<u64> = moduli
-                .iter()
-                .map(|&q| {
-                    if ternary >= 0 {
-                        (ternary as u64) % q
-                    } else {
-                        // -1 mod q = q - 1
-                        q - 1
-                    }
-                })
-                .collect();
+                // Convert to RNS representation
+                let rns_values: Vec<u64> = moduli
+                    .iter()
+                    .map(|&q| {
+                        if ternary >= 0 {
+                            (ternary as u64) % q
+                        } else {
+                            // -1 mod q = q - 1
+                            q - 1
+                        }
+                    })
+                    .collect();
 
-            coeffs.push(RnsRepresentation::new(rns_values, moduli.clone()));
-        }
+                coeffs.push(RnsRepresentation::new(rns_values, moduli.clone()));
+            }
+
+            coeffs
+        });
 
         Self::new(coeffs, level)
     }
@@ -155,14 +213,22 @@ pub struct KeyContext {
 
 impl KeyContext {
     /// Create new key context
+    /// Parallelizes NTT context creation for faster initialization
     pub fn new(params: CliffordFHEParams) -> Self {
         let moduli = params.moduli.clone();
 
+        println!("  [DEBUG] Creating NTT contexts for {} primes (parallelized)...", moduli.len());
+        let start = std::time::Instant::now();
+
+        // Parallelize NTT context creation (expensive: O(N log N) per prime)
         let ntt_contexts: Vec<NttContext> = moduli
-            .iter()
+            .par_iter()
             .map(|&q| NttContext::new(params.n, q))
             .collect();
 
+        println!("  [DEBUG] NTT contexts created in {:.2}s", start.elapsed().as_secs_f64());
+
+        // Barrett reducers are cheap, can stay sequential
         let reducers: Vec<BarrettReducer> = moduli
             .iter()
             .map(|&q| BarrettReducer::new(q))
@@ -180,84 +246,109 @@ impl KeyContext {
     /// # Returns
     /// (PublicKey, SecretKey, EvaluationKey)
     pub fn keygen(&self) -> (PublicKey, SecretKey, EvaluationKey) {
+        use std::time::Instant;
+
         let n = self.params.n;
         let level = self.params.max_level();
         let moduli: Vec<u64> = self.params.moduli[..=level].to_vec();
 
+        println!("  [DEBUG] Starting keygen for N={}, {} primes", n, moduli.len());
+
         // 1. Sample ternary secret key s ∈ {-1, 0, 1}^N
+        let start = Instant::now();
         let sk = SecretKey::sample_ternary(&self.params);
+        println!("  [DEBUG] Step 1/5: Secret key sampled in {:.2}s", start.elapsed().as_secs_f64());
 
         // 2. Sample uniform random polynomial a
+        let start = Instant::now();
         let a = self.sample_uniform(&moduli);
+        println!("  [DEBUG] Step 2/5: Uniform poly sampled in {:.2}s", start.elapsed().as_secs_f64());
 
         // 3. Sample error polynomial e from Gaussian distribution
+        let start = Instant::now();
         let e = self.sample_error(&moduli);
+        println!("  [DEBUG] Step 3/5: Error poly sampled in {:.2}s", start.elapsed().as_secs_f64());
 
         // 4. Compute b = -a*s + e using NTT multiplication
+        let start = Instant::now();
         let a_times_s = self.multiply_polynomials(&a, &sk.coeffs, &moduli);
         let neg_a_times_s = self.negate_polynomial(&a_times_s, &moduli);
         let b = self.add_polynomials(&neg_a_times_s, &e);
+        println!("  [DEBUG] Step 4/5: Public key computed in {:.2}s", start.elapsed().as_secs_f64());
 
         let pk = PublicKey::new(a, b, level);
 
         // 5. Generate evaluation key for relinearization
+        println!("  [DEBUG] Step 5/5: Starting evaluation key generation...");
+        let start = Instant::now();
         let evk = self.generate_evaluation_key(&sk, &moduli);
+        println!("  [DEBUG] Step 5/5: Evaluation key generated in {:.2}s", start.elapsed().as_secs_f64());
 
         (pk, sk, evk)
     }
 
     /// Sample uniform random polynomial from R_q
+    /// Uses fast thread-local ChaCha20 RNG for performance
     fn sample_uniform(&self, moduli: &[u64]) -> Vec<RnsRepresentation> {
-        let mut rng = thread_rng();
         let n = self.params.n;
 
-        (0..n)
-            .map(|_| {
-                let values: Vec<u64> = moduli.iter().map(|&q| rng.gen_range(0..q)).collect();
-                RnsRepresentation::new(values, moduli.to_vec())
-            })
-            .collect()
+        THREAD_RNG.with(|rng| {
+            let mut rng = rng.borrow_mut();
+            (0..n)
+                .map(|_| {
+                    let values: Vec<u64> = moduli.iter().map(|&q| rng.gen_range(0..q)).collect();
+                    RnsRepresentation::new(values, moduli.to_vec())
+                })
+                .collect()
+        })
     }
 
     /// Sample error polynomial from Gaussian distribution χ
+    /// Uses fast thread-local ChaCha20 RNG for performance
     fn sample_error(&self, moduli: &[u64]) -> Vec<RnsRepresentation> {
         let n = self.params.n;
         let error_std = self.params.error_std;
 
         let normal = Normal::new(0.0, error_std).expect("Invalid normal distribution parameters");
-        let mut rng = thread_rng();
 
-        (0..n)
-            .map(|_| {
-                // Sample from Gaussian
-                let error_val = normal.sample(&mut rng).round() as i64;
+        THREAD_RNG.with(|rng| {
+            let mut rng = rng.borrow_mut();
+            (0..n)
+                .map(|_| {
+                    // Sample from Gaussian
+                    let error_val = normal.sample(&mut *rng).round() as i64;
 
-                // Convert to RNS representation
-                let values: Vec<u64> = moduli
-                    .iter()
-                    .map(|&q| {
-                        if error_val >= 0 {
-                            (error_val as u64) % q
-                        } else {
-                            let abs_val = (-error_val) as u64;
-                            let remainder = abs_val % q;
-                            if remainder == 0 {
-                                0
+                    // Convert to RNS representation
+                    let values: Vec<u64> = moduli
+                        .iter()
+                        .map(|&q| {
+                            if error_val >= 0 {
+                                (error_val as u64) % q
                             } else {
-                                q - remainder
+                                let abs_val = (-error_val) as u64;
+                                let remainder = abs_val % q;
+                                if remainder == 0 {
+                                    0
+                                } else {
+                                    q - remainder
+                                }
                             }
-                        }
-                    })
-                    .collect();
+                        })
+                        .collect();
 
-                RnsRepresentation::new(values, moduli.to_vec())
-            })
-            .collect()
+                    RnsRepresentation::new(values, moduli.to_vec())
+                })
+                .collect()
+        })
     }
 
     /// Multiply two polynomials using NTT (negacyclic convolution mod x^n + 1)
     ///
     /// Uses V2's fixed NTT implementation (twisted NTT for negacyclic convolution).
+    /// **OPTIMIZED**:
+    /// - Uses precomputed NTT contexts from self.ntt_contexts
+    /// - Uses thread-local buffers to avoid allocations
+    /// - Sequential over primes (parallelism at outer digit level)
     fn multiply_polynomials(
         &self,
         a: &[RnsRepresentation],
@@ -267,36 +358,43 @@ impl KeyContext {
         let n = a.len();
         assert_eq!(b.len(), n);
 
-        let mut result = vec![RnsRepresentation::new(vec![0; moduli.len()], moduli.to_vec()); n];
+        // Preallocate result storage
+        let mut products_per_prime: Vec<Vec<u64>> = vec![vec![0u64; n]; moduli.len()];
 
-        // Multiply for each prime separately using V2's NTT
-        for (prime_idx, &q) in moduli.iter().enumerate() {
-            // Create NTT context for this prime
-            let ntt_ctx = super::ntt::NttContext::new(n, q);
+        // Process each prime using thread-local buffers
+        KEYGEN_BUFFERS.with(|bufs| {
+            let mut bufs = bufs.borrow_mut();
+            bufs.ensure_capacity(n);
 
-            // Extract coefficients for this prime (convert i64 to u64 mod q)
-            let a_mod_q: Vec<u64> = a.iter().map(|rns| {
-                let val = rns.values[prime_idx] as i64;
-                let normalized = ((val % q as i64) + q as i64) % q as i64;
-                normalized as u64
-            }).collect();
+            for (prime_idx, &_q) in moduli.iter().enumerate() {
+                // Use precomputed NTT context (MAJOR SPEEDUP!)
+                let ntt_ctx = &self.ntt_contexts[prime_idx];
+                let q = moduli[prime_idx] as i64;
 
-            let b_mod_q: Vec<u64> = b.iter().map(|rns| {
-                let val = rns.values[prime_idx] as i64;
-                let normalized = ((val % q as i64) + q as i64) % q as i64;
-                normalized as u64
-            }).collect();
+                // Extract coefficients into reusable buffers
+                for i in 0..n {
+                    let val_a = a[i].values[prime_idx] as i64;
+                    bufs.tmp_poly_a[i] = ((val_a % q) + q) as u64 % q as u64;
 
-            // Multiply using V2's NTT (negacyclic convolution)
-            let product_mod_q = ntt_ctx.multiply_polynomials(&a_mod_q, &b_mod_q);
+                    let val_b = b[i].values[prime_idx] as i64;
+                    bufs.tmp_poly_b[i] = ((val_b % q) + q) as u64 % q as u64;
+                }
 
-            // Store results (convert u64 back to i64)
-            for (i, &val) in product_mod_q.iter().enumerate() {
-                result[i].values[prime_idx] = val;
+                // Multiply using precomputed NTT context
+                let product = ntt_ctx.multiply_polynomials(&bufs.tmp_poly_a, &bufs.tmp_poly_b);
+
+                // Copy result
+                products_per_prime[prime_idx].copy_from_slice(&product);
             }
-        }
+        });
 
-        result
+        // Combine results into RNS representation
+        (0..n)
+            .map(|i| {
+                let values: Vec<u64> = products_per_prime.iter().map(|prod| prod[i]).collect();
+                RnsRepresentation::new(values, moduli.to_vec())
+            })
+            .collect()
     }
 
     /// Negate polynomial (compute -a mod q for each coefficient)
@@ -369,40 +467,49 @@ impl KeyContext {
             }
         }
 
-        for t in 0..num_digits {
-            // Compute B^t * s^2 using precomputed B^t mod q for each prime
-            let bt_s2: Vec<RnsRepresentation> = s_squared
-                .iter()
-                .map(|rns| {
-                    let values: Vec<u64> = rns.values.iter().enumerate()
-                        .map(|(j, &val)| {
-                            let q = moduli[j];
-                            let bt_mod_q = bpow_t_mod_q[t][j];
-                            // Compute val * B^t mod q
-                            ((val as u128) * (bt_mod_q as u128) % (q as u128)) as u64
-                        })
-                        .collect();
-                    RnsRepresentation::new(values, moduli.to_vec())
-                })
-                .collect();
+        // Parallelize evaluation key generation for each digit
+        let evk_pairs: Vec<(Vec<RnsRepresentation>, Vec<RnsRepresentation>)> = (0..num_digits)
+            .into_par_iter()
+            .map(|t| {
+                // Compute B^t * s^2 using precomputed B^t mod q for each prime
+                let bt_s2: Vec<RnsRepresentation> = s_squared
+                    .iter()
+                    .map(|rns| {
+                        let values: Vec<u64> = rns.values.iter().enumerate()
+                            .map(|(j, &val)| {
+                                let q = moduli[j];
+                                let bt_mod_q = bpow_t_mod_q[t][j];
+                                // Compute val * B^t mod q
+                                ((val as u128) * (bt_mod_q as u128) % (q as u128)) as u64
+                            })
+                            .collect();
+                        RnsRepresentation::new(values, moduli.to_vec())
+                    })
+                    .collect();
 
-            // Sample uniform a_t
-            let a_t = self.sample_uniform(moduli);
+                // Sample uniform a_t
+                let a_t = self.sample_uniform(moduli);
 
-            // Sample error e_t
-            let e_t = self.sample_error(moduli);
+                // Sample error e_t
+                let e_t = self.sample_error(moduli);
 
-            // Compute evk0[t] = -B^t*s^2 + a_t*s + e_t
-            // This ensures: evk0[t] - evk1[t]*s = -B^t*s^2 + e_t
-            let a_t_times_s = self.multiply_polynomials(&a_t, &sk.coeffs, moduli);
-            let neg_bt_s2 = self.negate_polynomial(&bt_s2, moduli);
-            let temp = self.add_polynomials(&neg_bt_s2, &a_t_times_s);
-            let b_t: Vec<RnsRepresentation> = temp
-                .iter()
-                .zip(&e_t)
-                .map(|(x, y)| x.add(y))
-                .collect();
+                // Compute evk0[t] = -B^t*s^2 + a_t*s + e_t
+                // This ensures: evk0[t] - evk1[t]*s = -B^t*s^2 + e_t
+                let a_t_times_s = self.multiply_polynomials(&a_t, &sk.coeffs, moduli);
+                let neg_bt_s2 = self.negate_polynomial(&bt_s2, moduli);
+                let temp = self.add_polynomials(&neg_bt_s2, &a_t_times_s);
+                let b_t: Vec<RnsRepresentation> = temp
+                    .iter()
+                    .zip(&e_t)
+                    .map(|(x, y)| x.add(y))
+                    .collect();
 
+                (b_t, a_t)
+            })
+            .collect();
+
+        // Unpack the parallel results
+        for (b_t, a_t) in evk_pairs {
             evk0.push(b_t);
             evk1.push(a_t);
         }

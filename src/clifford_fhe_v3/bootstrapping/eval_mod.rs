@@ -147,19 +147,21 @@ fn encode_constant_plaintext(
     use crate::clifford_fhe_v2::backends::cpu_optimized::ckks::Plaintext;
     use crate::clifford_fhe_v2::backends::cpu_optimized::rns::RnsRepresentation;
 
-    // Use proper V2 CKKS encoding with canonical embedding
-    let mut pt = Plaintext::encode(values, params.scale, params);
+    // Create parameters with only the moduli we need for this level
+    let mut level_params = params.clone();
+    level_params.moduli = params.moduli[..=level].to_vec();
 
-    // Adjust the plaintext to match the requested level
-    if level < params.max_level() {
-        // Truncate RNS representation to match the level
-        let moduli = &params.moduli[..=level];
-        for coeff in &mut pt.coeffs {
-            coeff.values.truncate(moduli.len());
-            coeff.moduli = moduli.to_vec();
-        }
-        pt.level = level;
-    }
+    // Recompute inv_scale_mod_q and inv_q_top_mod_q for truncated moduli
+    level_params.inv_scale_mod_q = CliffordFHEParams::precompute_inv_scale_mod_q(
+        params.scale,
+        &level_params.moduli
+    );
+    level_params.inv_q_top_mod_q = CliffordFHEParams::precompute_inv_q_top_mod_q(
+        &level_params.moduli
+    );
+
+    // Encode with the level-specific parameters
+    let pt = Plaintext::encode(values, params.scale, &level_params);
 
     Ok(pt)
 }
@@ -223,7 +225,8 @@ fn eval_sine_polynomial(
 
         // result = result + c_i
         if sin_coeffs[i].abs() > 1e-10 {
-            let ct_coeff = create_constant_ciphertext(sin_coeffs[i], params)?;
+            // Create constant at the same level as current result
+            let ct_coeff = create_constant_ciphertext(sin_coeffs[i], result.level, params)?;
             result = add_ciphertexts(&result, &ct_coeff, params)?;
         }
     }
@@ -296,6 +299,7 @@ fn subtract_ciphertexts(
 /// Create ciphertext encoding a constant
 fn create_constant_ciphertext(
     constant: f64,
+    level: usize,
     params: &CliffordFHEParams,
 ) -> Result<Ciphertext, String> {
     // Create plaintext with constant
@@ -307,8 +311,8 @@ fn create_constant_ciphertext(
 
     use crate::clifford_fhe_v2::backends::cpu_optimized::rns::RnsRepresentation;
 
-    // Convert coefficients to RNS representation
-    let moduli = &params.moduli[..=0]; // level 0
+    // Convert coefficients to RNS representation at the specified level
+    let moduli = &params.moduli[..=level];
     let mut rns_coeffs = Vec::with_capacity(n);
 
     for &coeff in &coeffs {
@@ -337,7 +341,7 @@ fn create_constant_ciphertext(
         c0,
         c1,
         n,
-        level: 0,
+        level,
         scale,
     })
 }

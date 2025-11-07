@@ -44,6 +44,12 @@ pub mod ntt;
 pub mod geometric;
 
 #[cfg(feature = "v2-gpu-metal")]
+pub mod keys;
+
+#[cfg(feature = "v2-gpu-metal")]
+pub mod ckks;
+
+#[cfg(feature = "v2-gpu-metal")]
 use crate::clifford_fhe_v2::core::{BackendCapabilities, BackendInfo};
 
 #[cfg(feature = "v2-gpu-metal")]
