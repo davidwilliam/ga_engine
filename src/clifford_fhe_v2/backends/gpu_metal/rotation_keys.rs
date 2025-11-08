@@ -577,6 +577,7 @@ mod tests {
             &rotation_steps,
             &params,
             metal_key_ctx.ntt_contexts(),
+            20,  // base_w for gadget decomposition
         ).expect("Failed to generate rotation keys");
 
         // Verify keys were generated
@@ -587,9 +588,18 @@ mod tests {
             assert!(rot_keys.has_key_for_step(step), "Missing key for step {}", step);
             let key = rot_keys.get_key_for_step(step).expect("Key not found");
 
-            // Verify key dimensions
-            assert_eq!(key.0.len(), params.n * (sk.level + 1), "Wrong a_k size");
-            assert_eq!(key.1.len(), params.n * (sk.level + 1), "Wrong b_k size");
+            // With gadget decomposition:
+            // key.0 = Vec<Vec<u64>> where outer Vec = num_digits, inner Vec = n × num_primes
+            assert_eq!(key.0.len(), rot_keys.num_digits(), "Wrong number of digits in rlk0");
+            assert_eq!(key.1.len(), rot_keys.num_digits(), "Wrong number of digits in rlk1");
+
+            // Check each digit has correct polynomial size
+            for digit_idx in 0..rot_keys.num_digits() {
+                assert_eq!(key.0[digit_idx].len(), params.n * (sk.level + 1),
+                          "Wrong polynomial size in rlk0 digit {}", digit_idx);
+                assert_eq!(key.1[digit_idx].len(), params.n * (sk.level + 1),
+                          "Wrong polynomial size in rlk1 digit {}", digit_idx);
+            }
         }
 
         println!("Rotation keys test passed!");

@@ -28,10 +28,13 @@ use super::rotation_keys::MetalRotationKeys;
 use crate::clifford_fhe_v2::params::CliffordFHEParams;
 use std::f64::consts::PI;
 
-/// Metal GPU CoeffToSlot transformation
+/// Metal GPU CoeffToSlot transformation (HYBRID CPU RESCALING)
 ///
 /// Transforms a ciphertext from coefficient representation to slot representation
-/// using Metal GPU for all operations.
+/// using Metal GPU for all operations with hybrid CPU rescaling.
+///
+/// This version uses exact BigInt CRT rescaling on CPU for correctness.
+/// Achieves ~3.6e-3 max error.
 ///
 /// # Arguments
 ///
@@ -211,13 +214,114 @@ pub fn slot_to_coeff_gpu(
     Ok(current)
 }
 
-/// Compute DFT twiddle factors for a given level
+/// Metal GPU CoeffToSlot transformation (NATIVE GPU RESCALING - EXPERIMENTAL)
 ///
-/// Returns (diag1, diag2) where:
-/// - diag1[j] = (1 + cos(θ_j)) / 2
-/// - diag2[j] = (1 - cos(θ_j)) / 2
-/// - θ_j = 2π * k(j) / N
+/// This version uses GPU-native RNS rescaling instead of hybrid CPU rescaling.
+/// Currently produces ~385k errors (vs ~3.6e-3 with hybrid) due to RNS approximation.
 ///
+/// Use this for performance benchmarking and experimentation with GPU rescaling algorithms.
+///
+pub fn coeff_to_slot_gpu_native(
+    ct: &MetalCiphertext,
+    rotation_keys: &MetalRotationKeys,
+    ctx: &MetalCkksContext,
+    params: &CliffordFHEParams,
+) -> Result<MetalCiphertext, String> {
+    let n = ct.n;
+    let num_slots = n / 2;
+    let num_levels = (num_slots as f64).log2() as usize;
+
+    println!("Metal GPU CoeffToSlot (NATIVE): N={}, slots={}, levels={}", n, num_slots, num_levels);
+
+    let mut current = ct.clone();
+
+    // Apply FFT-like butterfly structure
+    for level_idx in 0..num_levels {
+        let rotation_amount = 1 << level_idx;
+
+        println!("  Level {}: rotation by ±{}, current level={}", level_idx, rotation_amount, current.level);
+
+        // Rotate by +rotation_amount (GPU operation)
+        let ct_rotated = current.rotate_by_steps(rotation_amount as i32, rotation_keys, ctx)?;
+
+        // Compute DFT twiddle factors
+        let (diag1, diag2) = compute_dft_twiddle_factors(n, num_slots, level_idx);
+
+        // Encode diagonal matrices
+        let q_top = params.moduli[current.level] as f64;
+        let moduli: Vec<u64> = params.moduli[0..current.level+1].to_vec();
+        let pt_diag1 = encode_diagonal_for_metal(&diag1, q_top, n, current.level, &moduli)?;
+        let pt_diag2 = encode_diagonal_for_metal(&diag2, q_top, n, current.level, &moduli)?;
+
+        // Apply diagonal multiplications using NATIVE GPU rescaling
+        let ct_mul1 = current.multiply_plain_metal_native_rescale(&pt_diag1, ctx)?;
+        let ct_mul2 = ct_rotated.multiply_plain_metal_native_rescale(&pt_diag2, ctx)?;
+
+        // Add results
+        current = ct_mul1.add(&ct_mul2, ctx)?;
+
+        println!("    After level {}: level={}, scale={:.2e}", level_idx, current.level, current.scale);
+    }
+
+    println!("  Metal GPU CoeffToSlot (NATIVE) complete: final level={} (consumed {} levels)", current.level, num_levels);
+
+    Ok(current)
+}
+
+/// Metal GPU SlotToCoeff transformation (NATIVE GPU RESCALING - EXPERIMENTAL)
+///
+/// This version uses GPU-native RNS rescaling instead of hybrid CPU rescaling.
+/// Currently produces ~385k errors (vs ~3.6e-3 with hybrid) due to RNS approximation.
+///
+/// Use this for performance benchmarking and experimentation with GPU rescaling algorithms.
+///
+pub fn slot_to_coeff_gpu_native(
+    ct: &MetalCiphertext,
+    rotation_keys: &MetalRotationKeys,
+    ctx: &MetalCkksContext,
+    params: &CliffordFHEParams,
+) -> Result<MetalCiphertext, String> {
+    let n = ct.n;
+    let num_slots = n / 2;
+    let num_levels = (num_slots as f64).log2() as usize;
+
+    println!("Metal GPU SlotToCoeff (NATIVE): N={}, slots={}, levels={}", n, num_slots, num_levels);
+
+    let mut current = ct.clone();
+
+    // Apply inverse FFT (reversed order)
+    for level_idx in (0..num_levels).rev() {
+        let rotation_amount = 1 << level_idx;
+
+        println!("  Level {}: rotation by ∓{}, current level={}", level_idx, rotation_amount, current.level);
+
+        // Rotate by -rotation_amount (GPU operation)
+        let ct_rotated = current.rotate_by_steps(-(rotation_amount as i32), rotation_keys, ctx)?;
+
+        // Compute inverse DFT twiddle factors
+        let (diag1, diag2) = compute_inverse_dft_twiddle_factors(n, num_slots, level_idx);
+
+        // Encode diagonal matrices
+        let q_top = params.moduli[current.level] as f64;
+        let moduli: Vec<u64> = params.moduli[0..current.level+1].to_vec();
+        let pt_diag1 = encode_diagonal_for_metal(&diag1, q_top, n, current.level, &moduli)?;
+        let pt_diag2 = encode_diagonal_for_metal(&diag2, q_top, n, current.level, &moduli)?;
+
+        // Apply diagonal multiplications using NATIVE GPU rescaling
+        let ct_mul1 = current.multiply_plain_metal_native_rescale(&pt_diag1, ctx)?;
+        let ct_mul2 = ct_rotated.multiply_plain_metal_native_rescale(&pt_diag2, ctx)?;
+
+        // Add results
+        current = ct_mul1.add(&ct_mul2, ctx)?;
+
+        println!("    After level {}: level={}, scale={:.2e}", level_idx, current.level, current.scale);
+    }
+
+    println!("  Metal GPU SlotToCoeff (NATIVE) complete: final level={} (consumed {} levels)", current.level, num_levels);
+
+    Ok(current)
+}
+
 fn compute_dft_twiddle_factors(n: usize, num_slots: usize, level_idx: usize) -> (Vec<f64>, Vec<f64>) {
     let mut diag1 = vec![0.5; num_slots];
     let mut diag2 = vec![0.5; num_slots];
@@ -425,7 +529,7 @@ impl MetalCiphertext {
             return Err(format!("Ciphertext c0 size {} not divisible by n={}", self.c0.len(), n));
         }
 
-        // Extract only the active primes from ciphertext
+        // Extract only the active primes from ciphertext (keep strided layout for multiply_polys)
         let mut c0_active = vec![0u64; n * num_primes];
         let mut c1_active = vec![0u64; n * num_primes];
 
@@ -441,10 +545,10 @@ impl MetalCiphertext {
         // Get moduli for current level
         let moduli: Vec<u64> = ctx.params.moduli[0..num_primes].to_vec();
 
-        // Multiply c0 * pt (GPU NTT multiplication)
+        // Multiply c0 * pt (GPU NTT multiplication) - outputs strided layout
         let c0_mul = ctx.multiply_polys_flat_ntt_negacyclic(&c0_active, pt, &moduli)?;
 
-        // Multiply c1 * pt (GPU NTT multiplication)
+        // Multiply c1 * pt (GPU NTT multiplication) - outputs strided layout
         let c1_mul = ctx.multiply_polys_flat_ntt_negacyclic(&c1_active, pt, &moduli)?;
 
         // HYBRID RESCALE: Use CPU's exact BigInt CRT rescaling
@@ -499,6 +603,119 @@ impl MetalCiphertext {
             c1: c1_rescaled,
             n,
             num_primes: self.num_primes,  // Keep original total, but level controls active primes
+            level: new_level,
+            scale: new_scale,
+        })
+    }
+
+    /// Multiply ciphertext by plaintext and rescale (GPU-NATIVE RESCALING VERSION)
+    ///
+    /// This is an experimental version that uses GPU-native RNS rescaling instead of
+    /// hybrid CPU rescaling. Currently produces higher errors (~385k) vs hybrid (~3.6e-3)
+    /// due to RNS approximation not handling CKKS centered rounding correctly.
+    ///
+    /// Algorithm:
+    /// 1. Multiply: (c0, c1) * pt → (c0·pt, c1·pt)
+    /// 2. GPU-native rescale using RNS formula: r'ᵢ = (rᵢ - r_top) × q_top^{-1} mod qᵢ
+    /// 3. Update scale and level
+    ///
+    /// Use this for performance benchmarking and comparing with hybrid approach.
+    pub fn multiply_plain_metal_native_rescale(
+        &self,
+        pt: &[u64],
+        ctx: &MetalCkksContext,
+    ) -> Result<Self, String> {
+        let n = self.n;
+        let num_primes = self.level + 1;
+
+        // Verify plaintext size
+        if pt.len() != n * num_primes {
+            return Err(format!("Plaintext size mismatch: {} vs {} (n={}, num_primes={})",
+                pt.len(), n * num_primes, n, num_primes));
+        }
+
+        // Determine stride of ciphertext arrays
+        let ct_stride = self.c0.len() / n;
+        if self.c0.len() % n != 0 {
+            return Err(format!("Ciphertext c0 size {} not divisible by n={}", self.c0.len(), n));
+        }
+
+        // Extract only the active primes from ciphertext (keep strided layout for multiply_polys)
+        let mut c0_active = vec![0u64; n * num_primes];
+        let mut c1_active = vec![0u64; n * num_primes];
+
+        for coeff_idx in 0..n {
+            for prime_idx in 0..num_primes {
+                c0_active[coeff_idx * num_primes + prime_idx] = self.c0[coeff_idx * ct_stride + prime_idx];
+                c1_active[coeff_idx * num_primes + prime_idx] = self.c1[coeff_idx * ct_stride + prime_idx];
+            }
+        }
+
+        let moduli: Vec<u64> = ctx.params.moduli[0..num_primes].to_vec();
+
+        // Multiply c0 * pt (GPU NTT multiplication) - outputs strided layout
+        let c0_mul_strided = ctx.multiply_polys_flat_ntt_negacyclic(&c0_active, pt, &moduli)?;
+
+        // Multiply c1 * pt (GPU NTT multiplication) - outputs strided layout
+        let c1_mul_strided = ctx.multiply_polys_flat_ntt_negacyclic(&c1_active, pt, &moduli)?;
+
+        // Convert from strided to flat RNS layout for rescaling
+        // Strided: poly[coeff_idx * num_primes + prime_idx]
+        // Flat RNS: poly[prime_idx * n + coeff_idx]
+        let mut c0_mul = vec![0u64; n * num_primes];
+        let mut c1_mul = vec![0u64; n * num_primes];
+
+        for prime_idx in 0..num_primes {
+            for coeff_idx in 0..n {
+                c0_mul[prime_idx * n + coeff_idx] = c0_mul_strided[coeff_idx * num_primes + prime_idx];
+                c1_mul[prime_idx * n + coeff_idx] = c1_mul_strided[coeff_idx * num_primes + prime_idx];
+            }
+        }
+
+        // GPU-NATIVE EXACT RESCALING (FIXED - PROPER DRLMQ)
+        // Uses proper divide-and-round by last modulus with:
+        // 1. Centered rounding: ⌊(C + q_last/2) / q_last⌋
+        // 2. Correct 128-bit modular arithmetic (no precision loss)
+        // 3. All operations in standard domain (matching inverse NTT output)
+        //
+        // This fixes the domain mismatch issues that caused 100k+ errors.
+
+        let new_level = if self.level > 0 { self.level - 1 } else { 0 };
+        let new_num_primes = new_level + 1;
+
+        let q_top = moduli[self.level];
+
+        // After ct * pt: scale = ct.scale * pt.scale = self.scale * q_top
+        let pre_rescale_scale = self.scale * (q_top as f64);
+
+        // After rescale: scale = (self.scale * q_top) / q_top = self.scale
+        let new_scale = pre_rescale_scale / (q_top as f64);
+
+        // Apply GPU-native exact rescaling (FIXED algorithm) to both c0 and c1
+        // Returns flat RNS layout: [prime_idx * n + coeff_idx]
+        let c0_rescaled_flat = ctx.exact_rescale_gpu_fixed(&c0_mul, self.level)?;
+        let c1_rescaled_flat = ctx.exact_rescale_gpu_fixed(&c1_mul, self.level)?;
+
+        // Convert back to strided layout (COMPACT, matching hybrid version)
+        // Output: n × (num_primes_out) in strided layout
+        let num_primes_out = new_level + 1;
+        let mut c0_rescaled = vec![0u64; n * num_primes_out];
+        let mut c1_rescaled = vec![0u64; n * num_primes_out];
+
+        for coeff_idx in 0..n {
+            for prime_idx in 0..num_primes_out {
+                c0_rescaled[coeff_idx * num_primes_out + prime_idx] =
+                    c0_rescaled_flat[prime_idx * n + coeff_idx];
+                c1_rescaled[coeff_idx * num_primes_out + prime_idx] =
+                    c1_rescaled_flat[prime_idx * n + coeff_idx];
+            }
+        }
+
+        Ok(Self {
+            c0: c0_rescaled,
+            c1: c1_rescaled,
+            n,
+            num_primes: self.num_primes,
             level: new_level,
             scale: new_scale,
         })

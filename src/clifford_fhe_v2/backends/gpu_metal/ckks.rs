@@ -31,10 +31,15 @@ pub struct MetalCkksContext {
     /// Barrett reducers for modular reduction (lightweight, keep on CPU)
     reducers: Vec<BarrettReducer>,
 
-    /// Precomputed rescaling constants for GPU-native exact rescale
+    /// Precomputed rescaling constants for GPU-native exact rescale (subtractive method)
     /// rescale_inv_table[level][i] = q_{level}^{-1} mod q_i for i < level
     /// This allows GPU kernel to perform exact DivideRoundByLastQ without BigInt
-    rescale_inv_table: Vec<Vec<u64>>,
+    pub rescale_inv_table: Vec<Vec<u64>>,
+
+    /// Precomputed alpha table for alternative rescaling (additive formula)
+    /// alpha_table[level][i] = [(Q^(l) * Q^(l)^{-1} mod q_last) / q_last] mod q_i
+    /// where Q^(l) = q_0 * q_1 * ... * q_{level-1}
+    alpha_table: Vec<Vec<u64>>,
 }
 
 /// GPU plaintext representation
@@ -144,6 +149,9 @@ impl MetalCkksContext {
         // Precompute rescaling inverse constants for GPU-native exact rescale
         let rescale_inv_table = Self::precompute_rescale_inv_table(&params.moduli);
 
+        // Precompute alpha table for alternative rescaling method
+        let alpha_table = Self::precompute_alpha_table(&params.moduli);
+
         println!("  [Metal CKKS] ✓ GPU-only CKKS context ready!\n");
 
         Ok(Self {
@@ -152,6 +160,7 @@ impl MetalCkksContext {
             ntt_contexts,
             reducers,
             rescale_inv_table,
+            alpha_table,
         })
     }
 
@@ -818,6 +827,123 @@ impl MetalCkksContext {
         Ok(poly_out)
     }
 
+    /// GPU-Native Exact Rescaling using Alternative Algorithm (Additive Formula)
+    ///
+    /// NOTE: This function is currently DISABLED as it requires a separate shader.
+    /// The standard GPU rescaling (exact_rescale_gpu_fixed) is used instead.
+    ///
+    /// Rescale ciphertext by dropping last prime using additive formula:
+    /// result_i = c_i * q_last^{-1} + (c_last mod q_i) * alpha_i
+    ///
+    /// This approach may be more numerically stable than the subtractive formula.
+    ///
+    /// # Arguments
+    /// * `poly_in` - Input polynomial in flat RNS layout [n × num_primes_in]
+    /// * `level` - Current level (q_top = moduli[level])
+    ///
+    /// # Returns
+    /// Rescaled polynomial in flat RNS layout [n × (num_primes_in - 1)]
+    #[allow(dead_code)]
+    fn exact_rescale_gpu_alternative(&self, _poly_in: &[u64], _level: usize) -> Result<Vec<u64>, String> {
+        Err("Alternative rescaling method is disabled - use exact_rescale_gpu_fixed instead".to_string())
+    }
+
+    /// GPU-Native Exact Rescaling using FIXED Algorithm (proper DRLMQ)
+    ///
+    /// This fixes the domain mismatch and precision issues in the original implementation:
+    /// 1. Uses proper 128-bit modular arithmetic (no precision loss from % on intermediates)
+    /// 2. Implements centered rounding: ⌊(C + q_last/2) / q_last⌋
+    /// 3. All operations in standard domain (matching inverse NTT output)
+    ///
+    /// # Arguments
+    /// * `poly_in` - Input polynomial in flat RNS layout [n × num_primes_in] (standard domain)
+    /// * `level` - Current level (q_top = moduli[level])
+    ///
+    /// # Returns
+    /// Rescaled polynomial in flat RNS layout [n × (num_primes_in - 1)] (standard domain)
+    pub fn exact_rescale_gpu_fixed(&self, poly_in: &[u64], level: usize) -> Result<Vec<u64>, String> {
+        use metal::*;
+
+        if level == 0 {
+            return Err("Cannot rescale at level 0".to_string());
+        }
+
+        let n = self.params.n;
+        let moduli = &self.params.moduli[..=level];
+        let num_primes_in = moduli.len();
+        let num_primes_out = num_primes_in - 1;
+
+        assert_eq!(poly_in.len(), n * num_primes_in, "Input size mismatch");
+
+        // Get precomputed inverse constants for this level
+        let qtop_inv = &self.rescale_inv_table[level];
+        assert_eq!(qtop_inv.len(), num_primes_out, "Inverse table size mismatch");
+
+        // Create output buffer
+        let mut poly_out = vec![0u64; n * num_primes_out];
+
+        // Get Metal kernel and create pipeline state
+        let function = self.device.get_rns_fixed_function("rns_exact_rescale_fixed")?;
+        let pipeline = self.device.device().new_compute_pipeline_state_with_function(&function)
+            .map_err(|e| format!("Failed to create fixed rescale pipeline: {:?}", e))?;
+
+        // Create GPU buffers
+        let input_buffer = self.device.device().new_buffer_with_data(
+            poly_in.as_ptr() as *const _,
+            (poly_in.len() * std::mem::size_of::<u64>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let output_buffer = self.device.device().new_buffer(
+            (poly_out.len() * std::mem::size_of::<u64>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let moduli_buffer = self.device.device().new_buffer_with_data(
+            moduli.as_ptr() as *const _,
+            (moduli.len() * std::mem::size_of::<u64>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let inv_buffer = self.device.device().new_buffer_with_data(
+            qtop_inv.as_ptr() as *const _,
+            (qtop_inv.len() * std::mem::size_of::<u64>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let n_u32 = n as u32;
+        let num_primes_u32 = num_primes_in as u32;
+
+        // Execute kernel
+        self.device.execute_kernel(|encoder| {
+            encoder.set_compute_pipeline_state(&pipeline);
+            encoder.set_buffer(0, Some(&input_buffer), 0);
+            encoder.set_buffer(1, Some(&output_buffer), 0);
+            encoder.set_buffer(2, Some(&moduli_buffer), 0);
+            encoder.set_buffer(3, Some(&inv_buffer), 0);
+            encoder.set_bytes(4, std::mem::size_of::<u32>() as u64, &n_u32 as *const u32 as *const _);
+            encoder.set_bytes(5, std::mem::size_of::<u32>() as u64, &num_primes_u32 as *const u32 as *const _);
+
+            // Dispatch 1D grid with n threads (one per coefficient)
+            let threadgroup_size = MTLSize { width: 256.min(n as u64), height: 1, depth: 1 };
+            let num_threadgroups = ((n as u64 + threadgroup_size.width - 1) / threadgroup_size.width).max(1);
+            let grid_size = MTLSize { width: num_threadgroups, height: 1, depth: 1 };
+
+            encoder.dispatch_thread_groups(grid_size, threadgroup_size);
+
+            Ok(())
+        })?;
+
+        // Copy result back
+        let out_len = poly_out.len();
+        unsafe {
+            let ptr = output_buffer.contents() as *const u64;
+            poly_out.copy_from_slice(std::slice::from_raw_parts(ptr, out_len));
+        }
+
+        Ok(poly_out)
+    }
+
     // ==================== NTT Helper Functions ====================
 
     /// Find primitive 2n-th root of unity for NTT
@@ -950,6 +1076,90 @@ impl MetalCkksContext {
 
         table
     }
+
+    /// Precompute alpha table for alternative rescaling method (additive formula)
+    ///
+    /// For each level L, precompute:
+    /// alpha_i = [(Q^(l) * Q^(l)^{-1} mod q_L) / q_L] mod q_i
+    /// where Q^(l) = q_0 * q_1 * ... * q_{L-1}
+    fn precompute_alpha_table(moduli: &[u64]) -> Vec<Vec<u64>> {
+        use num_bigint::BigUint;
+
+        let num_primes = moduli.len();
+        let mut table = Vec::with_capacity(num_primes);
+
+        for level in 0..num_primes {
+            if level == 0 {
+                // Level 0 has no lower primes
+                table.push(Vec::new());
+                continue;
+            }
+
+            let q_last = moduli[level];
+
+            // Compute Q^(l) = q_0 * q_1 * ... * q_{level-1}
+            let mut q_product = BigUint::from(1u64);
+            for i in 0..level {
+                q_product *= BigUint::from(moduli[i]);
+            }
+
+            // Compute Q^(l)^{-1} mod q_last
+            let q_inv_mod_qlast = Self::mod_inverse_bigint(&q_product, q_last)
+                .expect(&format!("Failed to compute Q^{{-1}} mod {}", q_last));
+
+            // Compute (Q^(l) * Q^(l)^{-1}) / q_last
+            let numerator = q_product * q_inv_mod_qlast;
+            let quotient = numerator / BigUint::from(q_last);
+
+            // Compute alpha_i = quotient mod q_i for each i < level
+            let mut alpha_row = Vec::with_capacity(level);
+            for i in 0..level {
+                let q_i = moduli[i];
+                let alpha_i = (&quotient % BigUint::from(q_i)).to_u64_digits().first().copied().unwrap_or(0);
+                alpha_row.push(alpha_i);
+            }
+
+            table.push(alpha_row);
+        }
+
+        table
+    }
+
+    /// Compute modular inverse of BigUint mod u64
+    fn mod_inverse_bigint(a: &num_bigint::BigUint, m: u64) -> Option<num_bigint::BigUint> {
+        use num_bigint::{BigUint, BigInt};
+
+        let m_big = BigUint::from(m);
+
+        // Extended GCD
+        let (g, x, _) = Self::extended_gcd(a.clone(), m_big.clone());
+
+        if g != BigUint::from(1u64) {
+            return None;
+        }
+
+        // Convert BigInt to BigUint (ensuring positive result)
+        let m_bigint = BigInt::from(m);
+        let x_mod = ((x % &m_bigint) + &m_bigint) % &m_bigint;
+
+        // Convert to BigUint
+        x_mod.to_biguint()
+    }
+
+    /// Extended GCD for BigUint
+    fn extended_gcd(a: num_bigint::BigUint, b: num_bigint::BigUint) -> (num_bigint::BigUint, num_bigint::BigInt, num_bigint::BigInt) {
+        use num_bigint::{BigUint, BigInt};
+
+        if b == BigUint::from(0u64) {
+            return (a, BigInt::from(1), BigInt::from(0));
+        }
+
+        let (g, x1, y1) = Self::extended_gcd(b.clone(), &a % &b);
+        let x = y1.clone();
+        let y = x1 - BigInt::from(&a / &b) * y1;
+
+        (g, x, y)
+    }
 }
 
 // Implement methods for MetalCiphertext
@@ -963,21 +1173,42 @@ impl MetalCiphertext {
         let moduli = &ctx.params.moduli[..=self.level];
         let n = self.n;
         let num_primes = self.num_primes;
+        let num_active_primes = self.level + 1;  // Number of primes actually in use at this level
 
         // Add c0 + c0' component-wise
+        // Note: After rescaling, actual array size is n * num_active_primes
+        // But output needs to be n * num_primes to match struct field
         let mut new_c0 = vec![0u64; n * num_primes];
-        for i in 0..(n * num_primes) {
-            let prime_idx = i % num_primes;
-            let q = moduli[prime_idx];
-            new_c0[i] = ((self.c0[i] as u128 + other.c0[i] as u128) % q as u128) as u64;
+        for coeff_idx in 0..n {
+            for prime_idx in 0..num_primes {
+                let out_idx = coeff_idx * num_primes + prime_idx;
+                // Only process active primes (indices 0 to level)
+                if prime_idx < num_active_primes {
+                    // Input arrays have stride num_active_primes, not num_primes
+                    let src_idx = coeff_idx * num_active_primes + prime_idx;
+                    let q = moduli[prime_idx];
+                    new_c0[out_idx] = ((self.c0[src_idx] as u128 + other.c0[src_idx] as u128) % q as u128) as u64;
+                } else {
+                    new_c0[out_idx] = 0;  // Inactive primes set to 0
+                }
+            }
         }
 
         // Add c1 + c1' component-wise
         let mut new_c1 = vec![0u64; n * num_primes];
-        for i in 0..(n * num_primes) {
-            let prime_idx = i % num_primes;
-            let q = moduli[prime_idx];
-            new_c1[i] = ((self.c1[i] as u128 + other.c1[i] as u128) % q as u128) as u64;
+        for coeff_idx in 0..n {
+            for prime_idx in 0..num_primes {
+                let out_idx = coeff_idx * num_primes + prime_idx;
+                // Only process active primes (indices 0 to level)
+                if prime_idx < num_active_primes {
+                    // Input arrays have stride num_active_primes, not num_primes
+                    let src_idx = coeff_idx * num_active_primes + prime_idx;
+                    let q = moduli[prime_idx];
+                    new_c1[out_idx] = ((self.c1[src_idx] as u128 + other.c1[src_idx] as u128) % q as u128) as u64;
+                } else {
+                    new_c1[out_idx] = 0;  // Inactive primes set to 0
+                }
+            }
         }
 
         // Scale stays the same (assuming both have same scale)
@@ -989,6 +1220,44 @@ impl MetalCiphertext {
             level: self.level,
             scale: self.scale,
         })
+    }
+
+    /// Trim ciphertext arrays to only active primes (level + 1)
+    ///
+    /// After rescaling operations, ciphertext arrays may have padding (stride = num_primes)
+    /// but only level + 1 primes are active. This method creates a new ciphertext with
+    /// arrays trimmed to size n × (level + 1) for compatibility with decrypt/encode operations.
+    pub fn trim_to_active_primes(&self) -> Self {
+        let n = self.n;
+        let num_active_primes = self.level + 1;
+        let current_stride = self.c0.len() / n;
+
+        // If already trimmed, return a clone
+        if current_stride == num_active_primes {
+            return self.clone();
+        }
+
+        // Extract only active primes
+        let mut trimmed_c0 = vec![0u64; n * num_active_primes];
+        let mut trimmed_c1 = vec![0u64; n * num_active_primes];
+
+        for coeff_idx in 0..n {
+            for prime_idx in 0..num_active_primes {
+                let src_idx = coeff_idx * current_stride + prime_idx;
+                let dst_idx = coeff_idx * num_active_primes + prime_idx;
+                trimmed_c0[dst_idx] = self.c0[src_idx];
+                trimmed_c1[dst_idx] = self.c1[src_idx];
+            }
+        }
+
+        Self {
+            c0: trimmed_c0,
+            c1: trimmed_c1,
+            n,
+            num_primes: num_active_primes,
+            level: self.level,
+            scale: self.scale,
+        }
     }
 
     /// Multiply ciphertext by plaintext using Metal GPU NTT
@@ -1320,9 +1589,24 @@ impl MetalCiphertext {
         eprintln!("[ROTATION DEBUG] After key switch - First 5 c0_final: {:?}", &c0_final[..5.min(c0_final.len())]);
         eprintln!("[ROTATION DEBUG] After key switch - First 5 c1_final: {:?}", &c1_final[..5.min(c1_final.len())]);
 
+        // Pad the compact output back to full stride
+        // c0_final and c1_final have size n × num_primes_active (strided layout)
+        // Need to expand to n × self.num_primes
+        let mut c0_padded = vec![0u64; n * self.num_primes];
+        let mut c1_padded = vec![0u64; n * self.num_primes];
+
+        for coeff_idx in 0..n {
+            for prime_idx in 0..num_primes_active {
+                c0_padded[coeff_idx * self.num_primes + prime_idx] =
+                    c0_final[coeff_idx * num_primes_active + prime_idx];
+                c1_padded[coeff_idx * self.num_primes + prime_idx] =
+                    c1_final[coeff_idx * num_primes_active + prime_idx];
+            }
+        }
+
         Ok(Self {
-            c0: c0_final,
-            c1: c1_final,
+            c0: c0_padded,
+            c1: c1_padded,
             n,
             num_primes: self.num_primes,  // Keep original total
             level: self.level,

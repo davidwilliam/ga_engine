@@ -6,6 +6,9 @@
 
 set -e  # Exit on first error
 
+# Use full path to cargo
+CARGO="${HOME}/.cargo/bin/cargo"
+
 echo "╔══════════════════════════════════════════════════════════════════╗"
 echo "║         GA Engine - Comprehensive Test Suite                    ║"
 echo "╚══════════════════════════════════════════════════════════════════╝"
@@ -54,10 +57,10 @@ echo "  V1: Baseline Reference Tests"
 echo "════════════════════════════════════════════════════════════════════"
 
 run_test "V1 Unit Tests (31 tests)" \
-    "cargo test --lib --features f64,nd,v1 --no-default-features --quiet 2>&1 | tail -20"
+    "$CARGO test --lib --features f64,nd,v1 --no-default-features --quiet 2>&1 | tail -20"
 
 run_test "V1 Build (Release)" \
-    "cargo build --release --features f64,nd,v1 --no-default-features --quiet"
+    "$CARGO build --release --features f64,nd,v1 --no-default-features --quiet"
 
 # ============================================================================
 # V2 CPU Tests
@@ -69,19 +72,19 @@ echo "  V2: CPU-Optimized Tests"
 echo "════════════════════════════════════════════════════════════════════"
 
 run_test "V2 Unit Tests (127 tests)" \
-    "cargo test --lib --features f64,nd,v2 --no-default-features --quiet 2>&1 | tail -20"
+    "$CARGO test --lib --features f64,nd,v2 --no-default-features --quiet 2>&1 | tail -20"
 
 run_test "V2 Build (Release)" \
-    "cargo build --release --features f64,nd,v2 --no-default-features --quiet"
+    "$CARGO build --release --features f64,nd,v2 --no-default-features --quiet"
 
 run_test "V2 NTT Module Tests" \
-    "cargo test --lib clifford_fhe_v2::backends::cpu_optimized::ntt --features f64,nd,v2 --no-default-features --quiet 2>&1 | tail -10"
+    "$CARGO test --lib clifford_fhe_v2::backends::cpu_optimized::ntt --features f64,nd,v2 --no-default-features --quiet 2>&1 | tail -10"
 
 run_test "V2 RNS Module Tests" \
-    "cargo test --lib clifford_fhe_v2::backends::cpu_optimized::rns --features f64,nd,v2 --no-default-features --quiet 2>&1 | tail -10"
+    "$CARGO test --lib clifford_fhe_v2::backends::cpu_optimized::rns --features f64,nd,v2 --no-default-features --quiet 2>&1 | tail -10"
 
 run_test "V2 CKKS Module Tests" \
-    "cargo test --lib clifford_fhe_v2::backends::cpu_optimized::ckks --features f64,nd,v2 --no-default-features --quiet 2>&1 | tail -10"
+    "$CARGO test --lib clifford_fhe_v2::backends::cpu_optimized::ckks --features f64,nd,v2 --no-default-features --quiet 2>&1 | tail -10"
 
 # ============================================================================
 # V2 Metal GPU Tests (macOS only)
@@ -94,10 +97,10 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     echo "════════════════════════════════════════════════════════════════════"
 
     run_test "V2 Metal GPU Build" \
-        "cargo build --release --features f64,nd,v2-gpu-metal --no-default-features --quiet"
+        "$CARGO build --release --features f64,nd,v2-gpu-metal --no-default-features --quiet"
 
     run_test "V2 Metal GPU Tests" \
-        "cargo test --lib --features f64,nd,v2-gpu-metal --no-default-features --quiet 2>&1 | tail -20"
+        "$CARGO test --lib --features f64,nd,v2-gpu-metal --no-default-features --quiet 2>&1 | tail -20"
 else
     echo ""
     echo -e "${YELLOW}⊘ Skipping Metal GPU tests (not on macOS)${NC}"
@@ -113,28 +116,28 @@ echo "  V3: Bootstrapping Tests"
 echo "════════════════════════════════════════════════════════════════════"
 
 run_test "V3 Build (with V2 backend)" \
-    "cargo build --release --features v2,v3 --quiet"
+    "$CARGO build --release --features v2,v3 --quiet"
 
 run_test "V3 Unit Tests (52 tests)" \
-    "cargo test --lib --features v2,v3 clifford_fhe_v3 --quiet 2>&1 | tail -20"
+    "$CARGO test --lib --features v2,v3 clifford_fhe_v3 --quiet 2>&1 | tail -20"
 
 run_test "V3 Prime Generation Tests" \
-    "cargo test --lib clifford_fhe_v3::prime_gen --features v2,v3 --quiet 2>&1 | tail -10"
+    "$CARGO test --lib clifford_fhe_v3::prime_gen --features v2,v3 --quiet 2>&1 | tail -10"
 
 run_test "V3 Bootstrap Context Tests" \
-    "cargo test --lib clifford_fhe_v3::bootstrapping::bootstrap_context --features v2,v3 --quiet 2>&1 | tail -10"
+    "$CARGO test --lib clifford_fhe_v3::bootstrapping::bootstrap_context --features v2,v3 --quiet 2>&1 | tail -10"
 
 run_test "V3 Rotation Tests" \
-    "cargo test --lib clifford_fhe_v3::bootstrapping::rotation --features v2,v3 --quiet 2>&1 | tail -10"
+    "$CARGO test --lib clifford_fhe_v3::bootstrapping::rotation --features v2,v3 --quiet 2>&1 | tail -10"
 
 run_test "V3 CoeffToSlot Tests" \
-    "cargo test --lib clifford_fhe_v3::bootstrapping::coeff_to_slot --features v2,v3 --quiet 2>&1 | tail -10"
+    "$CARGO test --lib clifford_fhe_v3::bootstrapping::coeff_to_slot --features v2,v3 --quiet 2>&1 | tail -10"
 
 run_test "V3 SlotToCoeff Tests" \
-    "cargo test --lib clifford_fhe_v3::bootstrapping::slot_to_coeff --features v2,v3 --quiet 2>&1 | tail -10"
+    "$CARGO test --lib clifford_fhe_v3::bootstrapping::slot_to_coeff --features v2,v3 --quiet 2>&1 | tail -10"
 
 run_test "V3 EvalMod Tests" \
-    "cargo test --lib clifford_fhe_v3::bootstrapping::eval_mod --features v2,v3 --quiet 2>&1 | tail -10"
+    "$CARGO test --lib clifford_fhe_v3::bootstrapping::eval_mod --features v2,v3 --quiet 2>&1 | tail -10"
 
 # ============================================================================
 # V3 + Metal GPU Tests (macOS only)
@@ -147,10 +150,27 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     echo "════════════════════════════════════════════════════════════════════"
 
     run_test "V3 + Metal Build" \
-        "cargo build --release --features v2,v3,v2-gpu-metal --quiet"
+        "$CARGO build --release --features v2,v3,v2-gpu-metal --quiet"
 
     run_test "V3 + Metal Tests" \
-        "cargo test --lib --features v2,v3,v2-gpu-metal --quiet 2>&1 | tail -20"
+        "$CARGO test --lib --features v2,v3,v2-gpu-metal --quiet 2>&1 | tail -20"
+
+    echo ""
+    echo "════════════════════════════════════════════════════════════════════"
+    echo "  V2 Metal GPU Bootstrap Tests (Production Features)"
+    echo "════════════════════════════════════════════════════════════════════"
+
+    run_test "GPU Rescaling Golden Compare (bit-exact validation)" \
+        "$CARGO run --release --features v2,v2-gpu-metal,v3 --example test_rescale_golden_compare 2>&1 | grep -q 'SUCCESS'"
+
+    run_test "Multiply-Rescale Layout Test" \
+        "$CARGO run --release --features v2,v2-gpu-metal,v3 --example test_multiply_rescale_layout 2>&1 | grep -q 'SUCCESS'"
+
+    echo ""
+    echo -e "${YELLOW}Note: Full bootstrap tests take ~60s each and are skipped in comprehensive suite.${NC}"
+    echo -e "${YELLOW}Run manually:${NC}"
+    echo -e "${YELLOW}  - Hybrid:  $CARGO run --release --features v2,v2-gpu-metal,v3 --example test_metal_gpu_bootstrap${NC}"
+    echo -e "${YELLOW}  - Native:  $CARGO run --release --features v2,v2-gpu-metal,v3 --example test_metal_gpu_bootstrap_native${NC}"
 fi
 
 # ============================================================================
@@ -163,10 +183,10 @@ echo "  Combined: All Versions"
 echo "════════════════════════════════════════════════════════════════════"
 
 run_test "All Versions Combined Build" \
-    "cargo build --release --features f64,nd,v1,v2,v3 --no-default-features --quiet"
+    "$CARGO build --release --features f64,nd,v1,v2,v3 --no-default-features --quiet"
 
 run_test "All Versions Combined Tests (249 tests)" \
-    "cargo test --lib --features v2,v3 --quiet 2>&1 | tail -20"
+    "$CARGO test --lib --features v2,v3 --quiet 2>&1 | tail -20"
 
 # ============================================================================
 # Lattice Reduction Tests (optional, uses default features)
@@ -178,7 +198,7 @@ echo "  Lattice Reduction (Optional)"
 echo "════════════════════════════════════════════════════════════════════"
 
 run_test "Lattice Reduction Tests" \
-    "cargo test --lib lattice_reduction --quiet 2>&1 | tail -20" || echo -e "${YELLOW}⊘ Lattice reduction tests failed (optional component)${NC}"
+    "$CARGO test --lib lattice_reduction --quiet 2>&1 | tail -20" || echo -e "${YELLOW}⊘ Lattice reduction tests failed (optional component)${NC}"
 
 # ============================================================================
 # Summary

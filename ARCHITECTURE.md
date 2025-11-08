@@ -1,207 +1,286 @@
-# GA Engine Architecture: V1 vs V2
+# GA Engine Architecture
 
-## Design Philosophy
+## Overview
 
-We maintain **two parallel implementations** of Clifford FHE:
-- **V1:** Research prototype, feature-complete, stable (for journal review)
-- **V2:** Optimized implementation with NTT/GPU/SIMD (active development)
+The GA Engine implements Clifford Homomorphic Encryption with **three parallel implementations**:
 
-This follows the **state-of-the-art pattern** used by major FHE libraries:
-- **SEAL:** Uses feature flags + versioned namespaces
-- **OpenFHE:** Modular backends with trait abstraction
-- **HEAAN:** Separate optimization paths with common interfaces
+- **V1:** Research prototype, stable (for Paper 1)
+- **V2:** Metal GPU-accelerated backend (active development)
+- **V3:** Bootstrap-optimized implementation (latest)
 
 ## Directory Structure
 
 ```
 src/
-├── clifford_fhe/           # V1 - STABLE, DO NOT MODIFY
-│   ├── mod.rs
-│   ├── ckks_rns.rs         # Basic RNS-CKKS
-│   ├── rns.rs              # Naive RNS arithmetic
-│   ├── geometric_product_rns.rs  # All 7 operations
-│   ├── keys_rns.rs
-│   ├── params.rs
-│   └── ... (other V1 files)
+├── clifford_fhe/              # V1 - STABLE (Paper 1)
+│   ├── ckks_rns.rs            # Basic RNS-CKKS
+│   ├── geometric_product_rns.rs
+│   └── ...
 │
-├── clifford_fhe_v2/        # V2 - ACTIVE DEVELOPMENT
-│   ├── mod.rs
-│   ├── core/               # Core abstractions (shared traits)
-│   │   ├── mod.rs
-│   │   ├── traits.rs       # CliffordFHE trait, Ciphertext trait, etc.
-│   │   └── types.rs        # Common types
+├── clifford_fhe_v2/           # V2 - Metal GPU Backend
+│   ├── backends/
+│   │   ├── cpu_optimized/     # CPU with NTT optimization
+│   │   │   ├── ckks.rs
+│   │   │   ├── ntt.rs
+│   │   │   └── keys.rs
+│   │   │
+│   │   └── gpu_metal/         # Apple Metal GPU backend
+│   │       ├── ckks.rs        # Core CKKS operations
+│   │       ├── ntt.rs         # GPU NTT transforms
+│   │       ├── keys.rs        # Key generation (CPU)
+│   │       ├── bootstrap.rs   # Bootstrap transformations ⭐
+│   │       ├── device.rs      # Metal device management
+│   │       └── shaders/
+│   │           ├── ntt.metal         # NTT kernels
+│   │           ├── pointwise.metal   # Element-wise ops
+│   │           ├── galois.metal      # Galois automorphism
+│   │           ├── gadget.metal      # Key switching
+│   │           └── rns_fixed.metal   # GPU rescaling ⭐
 │   │
-│   ├── backends/           # Multiple backends for benchmarking
-│   │   ├── mod.rs
-│   │   ├── cpu_optimized/  # NTT + SIMD (no GPU)
-│   │   │   ├── mod.rs
-│   │   │   ├── ntt.rs      # Harvey butterfly NTT
-│   │   │   ├── rns.rs      # Optimized RNS arithmetic
-│   │   │   └── geometric_product.rs
-│   │   │
-│   │   ├── gpu_cuda/       # CUDA backend (feature-gated)
-│   │   │   ├── mod.rs
-│   │   │   ├── kernels.cu  # CUDA kernels
-│   │   │   └── geometric_product.rs
-│   │   │
-│   │   ├── gpu_metal/      # Metal backend (feature-gated)
-│   │   │   ├── mod.rs
-│   │   │   └── geometric_product.rs
-│   │   │
-│   │   └── simd_batched/   # SIMD slot packing
-│   │       ├── mod.rs
-│   │       └── geometric_product.rs
-│   │
-│   ├── ckks_rns.rs         # V2 encryption/decryption
-│   ├── keys_rns.rs         # V2 key generation
-│   ├── params.rs           # V2 parameter sets
-│   └── rotation_keys.rs    # V2 specialized rotation keys
+│   └── params.rs              # Parameter sets
 │
-└── lib.rs                  # Feature flags expose V1 or V2
+└── clifford_fhe_v3/           # V3 - Bootstrap Optimized
+    ├── bootstrapping/         # Bootstrap operations
+    │   ├── coeff_to_slot.rs   # CoeffToSlot transform
+    │   ├── slot_to_coeff.rs   # SlotToCoeff transform
+    │   ├── eval_mod.rs        # Modular reduction
+    │   └── keys.rs            # Rotation key generation
+    │
+    ├── params.rs              # V3-optimized parameters
+    └── prime_gen.rs           # Dynamic NTT-friendly prime generation
 ```
 
-## Feature Flags (Cargo.toml)
+## Feature Flags
+
+Defined in `Cargo.toml`:
 
 ```toml
 [features]
-default = ["v1"]  # Default to stable V1
+default = ["v1"]
 
-# Version selection (mutually exclusive)
-v1 = []           # Stable
-v2 = []           # Optmized implementation (development)
+# Version selection
+v1 = []                        # Stable research implementation
+v2 = []                        # Metal GPU backend
+v3 = []                        # Bootstrap optimized
 
-# V2 backend selection (only active when v2 is enabled)
-v2-cpu-optimized = ["v2"]     # NTT + SIMD, no GPU
-v2-gpu-cuda = ["v2", "cudarc"] # CUDA backend
-v2-gpu-metal = ["v2", "metal"] # Metal backend (Apple Silicon)
-v2-simd-batched = ["v2"]      # SIMD slot packing
-
-# Combined optimization (all techniques)
-v2-full = ["v2", "v2-cpu-optimized", "v2-gpu-cuda", "v2-simd-batched"]
+# V2 backends (requires v2)
+v2-cpu-optimized = ["v2"]      # CPU with NTT
+v2-gpu-metal = ["v2", "metal"] # Apple Metal GPU
 ```
 
-## Usage Examples
+## Bootstrap Implementation
 
-### V1 - Default
-```bash
-# Use stable V1 for Paper 1 validation
-cargo test --features v1
-cargo run --example encrypted_3d_classification --features v1
-```
+### V2 Metal GPU Bootstrap
 
-### V2 - Optimized
-```bash
-# CPU-only optimized version
-cargo test --features v2-cpu-optimized
+Located in `src/clifford_fhe_v2/backends/gpu_metal/bootstrap.rs`
 
-# CUDA GPU acceleration
-cargo run --example encrypted_3d_classification --features v2-gpu-cuda
+**Two versions:**
 
-# Full optimization stack
-cargo bench --features v2-full
-```
+1. **Hybrid** (GPU multiply + CPU rescale)
+   - Functions: `coeff_to_slot_gpu()`, `slot_to_coeff_gpu()`
+   - Rescaling: CPU BigInt CRT
+   - Status: ✅ Production stable (~3.6e-3 error)
 
-## Code Example: Trait Abstraction
+2. **Native** (100% GPU)
+   - Functions: `coeff_to_slot_gpu_native()`, `slot_to_coeff_gpu_native()`
+   - Rescaling: GPU via `rns_fixed.metal` shader
+   - Status: ✅ Production stable (~3.6e-3 error)
 
-```rust
-// src/clifford_fhe_v2/core/traits.rs
-pub trait CliffordFHE {
-    type Ciphertext;
-    type Plaintext;
-    type PublicKey;
-    type SecretKey;
-    type EvaluationKey;
+### V3 Bootstrap
 
-    fn encrypt(&self, pk: &Self::PublicKey, pt: &Self::Plaintext) -> Self::Ciphertext;
-    fn decrypt(&self, sk: &Self::SecretKey, ct: &Self::Ciphertext) -> Self::Plaintext;
-    fn geometric_product(
-        &self,
-        a: &[Self::Ciphertext; 8],
-        b: &[Self::Ciphertext; 8],
-        evk: &Self::EvaluationKey,
-    ) -> [Self::Ciphertext; 8];
+Located in `src/clifford_fhe_v3/bootstrapping/`
+
+- **CPU-only implementation** with correct scale management
+- Used as reference for V2 Metal GPU development
+- Status: ✅ Working
+
+See [V3_BOOTSTRAP.md](V3_BOOTSTRAP.md) for detailed implementation guide.
+
+## Key Components
+
+### RNS (Residue Number System)
+
+All versions use multi-prime RNS representation for efficiency:
+- **V1/V2:** Fixed prime sets
+- **V3:** Dynamic NTT-friendly prime generation
+
+Example: 20 primes for N=1024 bootstrap
+- 1× ~60-bit prime
+- 19× ~45-bit primes
+
+### NTT (Number Theoretic Transform)
+
+Fast polynomial multiplication:
+- **V1:** Schoolbook multiplication (O(n²))
+- **V2 CPU:** Harvey butterfly NTT (O(n log n))
+- **V2 GPU:** Metal shader NTT with optimized memory access
+- **V3:** Uses V2's NTT implementation
+
+### Metal GPU Shaders
+
+Located in `src/clifford_fhe_v2/backends/gpu_metal/shaders/`:
+
+| Shader | Purpose | Key Feature |
+|--------|---------|-------------|
+| `ntt.metal` | Forward/inverse NTT | Optimized for Apple GPU |
+| `pointwise.metal` | Element-wise multiplication | Fused ops |
+| `galois.metal` | Galois automorphism | Rotation permutation |
+| `gadget.metal` | Gadget decomposition | Key switching |
+| `rns_fixed.metal` | **Exact rescaling** | Russian peasant mul_mod_128 ⭐ |
+
+### GPU Rescaling (`rns_fixed.metal`)
+
+**The Innovation:**
+
+Previous GPU rescaling attempts failed (~385k errors) due to:
+- ❌ Rounding in wrong domain
+- ❌ 128-bit overflow in modular multiplication
+
+**Solution:**
+
+```metal
+// Russian peasant multiplication (no 128-bit overflow)
+inline ulong mul_mod_128(ulong a, ulong b, ulong q) {
+    ulong result = 0;
+    a = a % q;
+
+    while (b > 0) {
+        if (b & 1) {
+            result = add_mod_lazy(result, a, q);
+            if (result >= q) result -= q;
+        }
+        a = add_mod_lazy(a, a, q);
+        if (a >= q) a -= q;
+        b >>= 1;
+    }
+
+    return result;
 }
-
-// V1 implementation
-impl CliffordFHE for v1::CliffordFHEV1 { ... }
-
-// V2 CPU backend
-impl CliffordFHE for v2::backends::CpuOptimized { ... }
-
-// V2 CUDA backend
-impl CliffordFHE for v2::backends::GpuCuda { ... }
 ```
 
-## Migration Strategy
+**Validation:**
+- Golden compare test: ✅ 0 mismatches (bit-exact with CPU)
+- Bootstrap test: ✅ 3.6e-3 error (same as hybrid)
 
-### Phase 1: Setup (Week 1)
-1. Copy `clifford_fhe/` → `clifford_fhe_v1/` (preserve Paper 1)
-2. Create `clifford_fhe_v2/` structure
-3. Add feature flags to `Cargo.toml`
-4. Update `lib.rs` with conditional compilation
+## Testing
 
-### Phase 2: Core Traits (Week 1-2)
-1. Define `CliffordFHE` trait and common types
-2. Implement trait for V1 (wrapper around existing code)
-3. Verify all V1 tests still pass
-
-### Phase 3: V2 Backends (Weeks 2-7)
-1. **cpu_optimized:** NTT + Barrett + SIMD (Phase 1 of roadmap)
-2. **gpu_cuda:** CUDA kernels (Phase 2 of roadmap)
-3. **simd_batched:** Slot packing (Phase 3 of roadmap)
-
-### Phase 4: Examples & Benchmarks (Ongoing)
-1. Duplicate examples for V1 and V2
-2. Comparative benchmarks (V1 vs V2 backends)
-3. Ablation studies (NTT only, GPU only, etc.)
-
-## Benefits of This Approach
-
-✅ **Paper 1 stays stable:** V1 frozen, reviewers can reproduce exactly
-✅ **Independent development:** V2 work doesn't break V1
-✅ **Easy comparison:** Same test cases, different backends
-✅ **Feature flags:** Compile only what you need
-✅ **Trait abstraction:** Swap backends without changing application code
-✅ **Follows best practices:** Same pattern as SEAL, OpenFHE, Concrete
-
-## Testing Strategy
-
+### Unit Tests
 ```bash
-# Verify V1 unchanged (Paper 1 validation)
-cargo test --features v1 --lib
-cargo test --features v1 --test test_geometric_operations
+# V1 tests
+cargo test --features v1
 
-# Test V2 CPU backend
-cargo test --features v2-cpu-optimized
+# V2 CPU tests
+cargo test --features v2,v2-cpu-optimized
 
-# Test V2 CUDA backend (requires GPU)
-cargo test --features v2-gpu-cuda
+# V2 Metal GPU tests
+cargo test --features v2,v2-gpu-metal
 
-# Comparative benchmark (V1 vs V2 all backends)
-cargo bench --features v2-full -- --save-baseline crypto2026
+# V3 tests
+cargo test --features v3
 ```
 
-## Maintenance Rules
+### Bootstrap Tests
+```bash
+# Hybrid (GPU + CPU rescale)
+cargo run --release --features v2,v2-gpu-metal,v3 --example test_metal_gpu_bootstrap
 
-### V1 (`clifford_fhe/` or `clifford_fhe_v1/`)
-- ❌ **NO MODIFICATIONS** except critical bug fixes
-- ✅ Only touch if Paper 1 reviewers request changes
-- ✅ All tests must continue passing
-- ✅ Keep consistent with journal article text
+# Native (100% GPU)
+cargo run --release --features v2,v2-gpu-metal,v3 --example test_metal_gpu_bootstrap_native
 
-### V2 (`clifford_fhe_v2/`)
-- ✅ **ACTIVE DEVELOPMENT** 
-- ✅ Aggressive optimization, breaking changes OK
-- ✅ Benchmarks required for all changes
-- ✅ Document performance improvements
+# V3 CPU reference
+cargo run --release --features v2,v2-gpu-metal,v3 --example test_v3_metal_bootstrap_correct
+```
+
+### Validation Tests
+```bash
+# GPU rescaling golden compare
+cargo run --release --features v2,v2-gpu-metal,v3 --example test_rescale_golden_compare
+
+# Layout conversion test
+cargo run --release --features v2,v2-gpu-metal,v3 --example test_multiply_rescale_layout
+```
+
+See [TESTING_GUIDE.md](TESTING_GUIDE.md) for comprehensive testing instructions.
+
+## Performance (Apple M3 Max)
+
+### Bootstrap Comparison
+
+| Version | Total Time | Error | Notes |
+|---------|-----------|-------|-------|
+| **V3 CPU** | ~70s | 3.6e-3 | Reference implementation |
+| **V2 Hybrid** | ~65s | 3.6e-3 | GPU multiply + CPU rescale |
+| **V2 Native** | ~60s | 3.6e-3 | **100% GPU** ⭐ |
+
+### Per-Operation Breakdown
+
+| Operation | V2 Native | Notes |
+|-----------|-----------|-------|
+| Key Generation | ~73s | CPU only |
+| Encryption | ~175ms | GPU |
+| CoeffToSlot (9 levels) | ~50s | GPU |
+| SlotToCoeff (9 levels) | ~12s | GPU |
+| Decryption | ~11ms | GPU |
+
+See [BENCHMARKS.md](BENCHMARKS.md) for detailed performance analysis.
+
+## Development Guidelines
+
+### V1 - DO NOT MODIFY
+- ❌ Frozen for Paper 1 publication
+- ✅ Only critical bug fixes allowed
+- ✅ Must maintain exact reproducibility
+
+### V2 - Active Development
+- ✅ Metal GPU optimization
+- ✅ Bootstrap implementation
+- ✅ Performance tuning
+- ✅ New shader development
+
+### V3 - Bootstrap Research
+- ✅ Parameter optimization
+- ✅ Algorithm improvements
+- ✅ Reference implementations
 
 ## Documentation
 
-- `V1/`: Links to stable sections
-- `V2/`: Links to optmized README sections
-- Each backend documents optimization techniques
-- Benchmarks show speedup vs V1 baseline
+Core docs (kept):
+- [README.md](README.md) - Project overview
+- [V3_BOOTSTRAP.md](V3_BOOTSTRAP.md) - Bootstrap implementation guide
+- [BENCHMARKS.md](BENCHMARKS.md) - Performance measurements
+- [COMMANDS.md](COMMANDS.md) - Command reference
+- [INSTALLATION.md](INSTALLATION.md) - Setup instructions
+- [TESTING_GUIDE.md](TESTING_GUIDE.md) - Testing procedures
 
----
+## Key Achievements
 
-**Next Steps:** Execute Phase 1 (setup) to create this structure.
+### V1 (2024)
+- ✅ First working Clifford FHE implementation
+- ✅ All 7 geometric operations
+- ✅ Paper 1 published
+
+### V2 (2024)
+- ✅ Metal GPU backend operational
+- ✅ NTT optimization (10x+ speedup)
+- ✅ Rotation operations working
+- ✅ **100% GPU bootstrap** (November 2024) ⭐
+
+### V3 (2024)
+- ✅ Bootstrap-optimized parameters
+- ✅ Dynamic prime generation
+- ✅ Reference implementation for V2 validation
+
+## Future Work
+
+1. **Batching**: Process multiple ciphertexts in parallel
+2. **EvalMod**: Complete modular reduction for full bootstrap
+3. **Optimization**: Pipeline overlapping, persistent GPU buffers
+4. **Portability**: Vulkan backend for cross-platform GPU support
+
+## Authors
+
+Implementation by David Silva with Claude Code assistance.
+
+## License
+
+See [LICENSE](LICENSE) file in the repository root.

@@ -209,22 +209,27 @@ kernel void rns_ntt_multiply_barrett(
     }
 }
 
-/// RNS: Exact rescaling (DivideRoundByLastQ) - GPU-native implementation
+/// RNS: Exact rescaling with ROUNDING (DivideRoundByLastQ) - CKKS-compliant
 ///
-/// This implements the critical CKKS rescale operation that was causing 285k errors.
-/// Algorithm: For each coefficient, perform exact division by q_top with proper rounding.
+/// This implements the CKKS rescale operation with proper centered rounding:
+/// C' = ⌊(C + q_top/2) / q_top⌋ mod Q'
 ///
-/// RNS-native approach (avoids BigInt reconstruction):
+/// The key insight: we can do this entirely in RNS by:
+/// 1. Adding q_top/2 to the last limb (mod q_top) BEFORE eliminating it
+/// 2. Mapping that rounded residue into each qi using the same linear relation
+///
+/// Algorithm per coefficient:
 /// Given residues (r₀, r₁, ..., rₖ₋₁, rₖ) mod (q₀, q₁, ..., qₖ₋₁, qₖ)
-/// We want: C' = round(C / qₖ) mod qᵢ for each i < k
 ///
-/// Formula: r'ᵢ = (rᵢ - rₖ) × qₖ⁻¹ mod qᵢ
-/// where qₖ⁻¹ is the modular inverse of qₖ mod qᵢ (precomputed)
+/// Step 1: Add rounding term in last limb
+///   r_top_rounded = (r_top + q_top/2) mod q_top
 ///
-/// This works because:
-/// C ≡ rᵢ (mod qᵢ) and C ≡ rₖ (mod qₖ)
-/// So C = rₖ + t×qₖ for some integer t
-/// We want t mod qᵢ, which is (C - rₖ)/qₖ mod qᵢ ≈ (rᵢ - rₖ)×qₖ⁻¹ mod qᵢ
+/// Step 2: For each output prime qi:
+///   mapped_top = r_top_rounded × q_top^{-1} mod qi
+///   diff = (ri - mapped_top) mod qi
+///   r'i = diff × q_top^{-1} mod qi
+///
+/// This is exactly "⌊(C + q_top/2)/q_top⌋ in RNS" - no BigInt needed!
 ///
 /// @param poly_in Input polynomial [n × num_primes_in] in RNS form
 /// @param poly_out Output polynomial [n × num_primes_out] where num_primes_out = num_primes_in - 1
@@ -247,8 +252,14 @@ kernel void rns_exact_rescale(
     uint num_primes_out = num_primes_in - 1;
     uint top_idx = num_primes_in - 1;  // Index of q_top
 
-    // Get r_top (the residue mod q_top that we're dividing by)
+    // Get q_top and r_top
+    ulong q_top = moduli[top_idx];
     ulong r_top = poly_in[top_idx * n + coeff_idx];
+
+    // Add (q_top-1)/2 to r_top for rounding (mod q_top)
+    // This changes from flooring to rounding
+    ulong half_qtop = q_top >> 1;
+    ulong r_top_rounded = (r_top + half_qtop) % q_top;
 
     // For each output prime q_i (all primes except q_top)
     for (uint i = 0; i < num_primes_out; i++) {
@@ -256,15 +267,28 @@ kernel void rns_exact_rescale(
         ulong r_i = poly_in[i * n + coeff_idx];
         ulong qtop_inv = qtop_inv_mod_qi[i];
 
-        // Compute (r_i - r_top) mod q_i
-        ulong diff;
-        if (r_i >= r_top) {
-            diff = r_i - r_top;
+        // Step 1: Map (r_top + half_qtop) into qi domain
+        ulong temp = r_top_rounded % q_i;
+
+        // Step 2: Subtract the rounding correction (half_qtop mod qi)
+        // The negative sign turns into a plus in the next subtraction
+        ulong half_mod_qi = half_qtop % q_i;
+        ulong r_top_mod_qi;
+        if (temp >= half_mod_qi) {
+            r_top_mod_qi = temp - half_mod_qi;
         } else {
-            diff = r_i + q_i - r_top;
+            r_top_mod_qi = temp + q_i - half_mod_qi;
         }
 
-        // Multiply by q_top^{-1} mod q_i
+        // Step 3: Compute (r_i - r_top_mod_qi) mod qi
+        ulong diff;
+        if (r_i >= r_top_mod_qi) {
+            diff = r_i - r_top_mod_qi;
+        } else {
+            diff = r_i + q_i - r_top_mod_qi;
+        }
+
+        // Step 4: Multiply by q_top^{-1} mod qi
         ulong result = (diff * qtop_inv) % q_i;
 
         // Store result

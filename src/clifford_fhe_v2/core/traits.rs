@@ -3,10 +3,10 @@
 //! These traits provide a common interface across different backend implementations
 //! (CPU optimized, CUDA GPU, Metal GPU, SIMD batched).
 //!
-//! This follows the design pattern used by:
-//! - **OpenFHE:** Multiple backends with common interface
-//! - **SEAL:** Backend abstraction for NTT implementations
-//! - **Concrete (Zama):** Trait-based backend selection
+//! This follows common FHE library design patterns:
+//! - Multiple backends with unified interface
+//! - Backend abstraction for hardware-specific optimizations
+//! - Trait-based compile-time backend selection
 
 use super::types::*;
 

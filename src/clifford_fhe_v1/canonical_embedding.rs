@@ -32,7 +32,6 @@
 //!
 //! - CKKS paper: "Homomorphic Encryption for Arithmetic of Approximate Numbers"
 //!   Cheon, Kim, Kim, Song (2017)
-//! - SEAL implementation: Microsoft SEAL library
 //! - Halevi & Shoup: "Algorithms in HElib" (2014)
 
 use rustfft::num_complex::Complex;

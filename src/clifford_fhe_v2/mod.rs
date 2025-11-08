@@ -39,10 +39,10 @@
 //! - `backends::*`: Different implementations (CPU, CUDA, Metal, SIMD)
 //! - Feature flags: Compile only what you need
 //!
-//! This follows the design pattern of:
-//! - **SEAL:** Versioned namespaces + NTT backends
-//! - **OpenFHE:** Modular architecture with multiple backends
-//! - **Concrete (Zama):** Trait abstraction for backend selection
+//! This follows the design pattern of well-known FHE libraries:
+//! - Versioned namespaces for backward compatibility
+//! - Modular architecture with multiple backends (CPU, GPU)
+//! - Trait abstraction for backend selection
 
 pub mod backends;
 pub mod core;

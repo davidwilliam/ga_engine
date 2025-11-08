@@ -25,7 +25,7 @@
 //! # References
 //!
 //! - "Homomorphic Encryption for Arithmetic of Approximate Numbers" (CKKS paper)
-//! - SEAL library: `seal/util/galois.h`
+//! - Galois automorphism implementations in standard FHE libraries
 
 use std::collections::HashMap;
 

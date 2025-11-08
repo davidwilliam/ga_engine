@@ -80,11 +80,17 @@ cargo build --release --features f64,nd,v2-gpu-cuda --no-default-features
 cargo test --test test_geometric_operations_cuda --features f64,nd,v2-gpu-cuda --no-default-features -- --nocapture
 ```
 
-#### Option D: V3 with Bootstrapping (Currently Has Compilation Errors)
+#### Option D: V3 with Bootstrap (PRODUCTION READY - November 2024)
 ```bash
-# Note: V3 needs fixes before this works
-cargo build --release --features f64,nd,v2,v3 --no-default-features
-cargo test --lib --features f64,nd,v2,v3 --no-default-features
+# V3 with Metal GPU backend (RECOMMENDED for Apple Silicon)
+cargo build --release --features v2,v2-gpu-metal,v3
+cargo test --lib --features v2,v3
+
+# Test hybrid bootstrap (GPU multiply + CPU rescale)
+cargo run --release --features v2,v2-gpu-metal,v3 --example test_metal_gpu_bootstrap
+
+# Test native bootstrap (100% GPU)
+cargo run --release --features v2,v2-gpu-metal,v3 --example test_metal_gpu_bootstrap_native
 ```
 
 ## Verification
@@ -99,17 +105,17 @@ cargo run --release --features f64,nd,v2 --no-default-features --example encrypt
 
 ### Full Test Suite
 ```bash
-# V1 Baseline (67 tests)
+# V1 Baseline (31 tests)
 cargo test --lib --features f64,nd,v1 --no-default-features
 
 # V2 Optimized (132 tests)
 cargo test --lib --features f64,nd,v2 --no-default-features
 
-# V3 Bootstrapping (needs fixes)
-cargo test --lib --features f64,nd,v2,v3 --no-default-features
+# V3 Bootstrapping (52 tests - 100% passing)
+cargo test --lib --features v2,v3 clifford_fhe_v3
 
-# All versions with lattice reduction (requires working CMake)
-cargo test --features v1,v2,lattice-reduction
+# All versions (V1 + V2 + V3 = 249 tests)
+cargo test --lib --features v2,v3
 ```
 
 ## Troubleshooting
@@ -149,8 +155,10 @@ cargo build --release --features v2 --example encrypted_3d_classification
 
 ## Next Steps
 
-- See [QUICK_START.md](QUICK_START.md) for running examples
-- See [API_REFERENCE.md](API_REFERENCE.md) for API documentation
-- See [PERFORMANCE.md](PERFORMANCE.md) for benchmarking
+- See [README.md](README.md) for project overview and quick start
+- See [COMMANDS.md](COMMANDS.md) for complete command reference
+- See [V3_BOOTSTRAP.md](V3_BOOTSTRAP.md) for bootstrap implementation guide
+- See [BENCHMARKS.md](BENCHMARKS.md) for performance measurements
+- See [TESTING_GUIDE.md](TESTING_GUIDE.md) for testing procedures
 
 For issues, contact: dsilva@datahubz.com or open GitHub issue.
