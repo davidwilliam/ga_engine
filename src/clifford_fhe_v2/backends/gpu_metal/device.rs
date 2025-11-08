@@ -10,6 +10,7 @@ pub struct MetalDevice {
     device: Device,
     command_queue: CommandQueue,
     library: Library,
+    rotation_library: Library,
 }
 
 impl MetalDevice {
@@ -25,15 +26,21 @@ impl MetalDevice {
         // Create command queue for GPU work submission
         let command_queue = device.new_command_queue();
 
-        // Load Metal shaders from source
+        // Load Metal shaders from source (NTT operations)
         let library_source = include_str!("shaders/ntt.metal");
         let library = device.new_library_with_source(library_source, &CompileOptions::new())
-            .map_err(|e| format!("Failed to compile Metal shaders: {:?}", e))?;
+            .map_err(|e| format!("Failed to compile NTT Metal shaders: {:?}", e))?;
+
+        // Load rotation shaders from source (Galois automorphisms)
+        let rotation_source = include_str!("shaders/rotation.metal");
+        let rotation_library = device.new_library_with_source(rotation_source, &CompileOptions::new())
+            .map_err(|e| format!("Failed to compile rotation Metal shaders: {:?}", e))?;
 
         Ok(MetalDevice {
             device,
             command_queue,
             library,
+            rotation_library,
         })
     }
 
@@ -59,16 +66,33 @@ impl MetalDevice {
         buffer
     }
 
+    /// Create a buffer on GPU with i32 data (for sign corrections)
+    pub fn create_buffer_with_i32_data(&self, data: &[i32]) -> Buffer {
+        let byte_length = (data.len() * std::mem::size_of::<i32>()) as u64;
+        let buffer = self.device.new_buffer_with_data(
+            data.as_ptr() as *const _,
+            byte_length,
+            MTLResourceOptions::StorageModeShared,
+        );
+        buffer
+    }
+
     /// Create empty buffer on GPU
     pub fn create_buffer(&self, length: usize) -> Buffer {
         let byte_length = (length * std::mem::size_of::<u64>()) as u64;
         self.device.new_buffer(byte_length, MTLResourceOptions::StorageModeShared)
     }
 
-    /// Get Metal function (kernel) by name
+    /// Get Metal function (kernel) by name from NTT library
     pub fn get_function(&self, name: &str) -> Result<Function, String> {
         self.library.get_function(name, None)
             .map_err(|e| format!("Metal function '{}' not found: {:?}", name, e))
+    }
+
+    /// Get Metal function (kernel) by name from rotation library
+    pub fn get_rotation_function(&self, name: &str) -> Result<Function, String> {
+        self.rotation_library.get_function(name, None)
+            .map_err(|e| format!("Metal rotation function '{}' not found: {:?}", name, e))
     }
 
     /// Execute a compute kernel

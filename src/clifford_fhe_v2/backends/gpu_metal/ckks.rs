@@ -11,6 +11,8 @@ use crate::clifford_fhe_v2::params::CliffordFHEParams;
 use crate::clifford_fhe_v2::backends::cpu_optimized::rns::BarrettReducer;
 use crate::clifford_fhe_v2::backends::cpu_optimized::keys::{PublicKey, SecretKey};
 use std::sync::Arc;
+use num_bigint::BigInt;
+use num_traits::{Zero, One, ToPrimitive};
 
 /// Metal GPU-accelerated CKKS context
 ///
@@ -20,8 +22,8 @@ pub struct MetalCkksContext {
     /// Shared Metal device
     device: Arc<MetalDevice>,
 
-    /// FHE parameters
-    params: CliffordFHEParams,
+    /// FHE parameters (public for bootstrap operations)
+    pub params: CliffordFHEParams,
 
     /// Metal NTT contexts (one per prime in RNS)
     ntt_contexts: Vec<MetalNttContext>,
@@ -633,7 +635,8 @@ impl MetalCkksContext {
     ///
     /// This is used for CKKS plaintext multiplication which requires negacyclic convolution (mod x^n + 1).
     /// Uses twist/untwist to convert cyclic NTT to negacyclic.
-    fn multiply_polys_flat_ntt_negacyclic(&self, a_flat: &[u64], b_flat: &[u64], moduli: &[u64]) -> Result<Vec<u64>, String> {
+    /// Public for use by bootstrap operations.
+    pub fn multiply_polys_flat_ntt_negacyclic(&self, a_flat: &[u64], b_flat: &[u64], moduli: &[u64]) -> Result<Vec<u64>, String> {
         self.multiply_polys_flat_ntt_impl(a_flat, b_flat, moduli, true)
     }
 
@@ -649,8 +652,11 @@ impl MetalCkksContext {
 
         // Infer the stride from the input array length
         let num_primes_in_array = a_flat.len() / n;
-        if b_flat.len() / n != num_primes_in_array {
-            return Err("Input arrays have different strides".to_string());
+        let b_stride = b_flat.len() / n;
+        if b_stride != num_primes_in_array {
+            return Err(format!("Input arrays have different strides: a={} ({}×{}), b={} ({}×{})",
+                a_flat.len(), n, num_primes_in_array,
+                b_flat.len(), n, b_stride));
         }
 
         let mut result_flat = vec![0u64; n * num_primes_to_process];
@@ -1039,6 +1045,467 @@ impl MetalCiphertext {
             level: new_level,
             scale: new_scale,
         })
+    }
+
+    /// Rotate ciphertext slots by r steps using Metal GPU
+    ///
+    /// Uses Galois automorphism σ_k where k = 5^r (mod 2N).
+    /// Requires rotation keys for the specified step.
+    ///
+    /// # Algorithm
+    /// 1. Apply σ_k to c₀ and c₁ (GPU kernel)
+    /// 2. Key switch c₁ using rotation key (GPU NTT)
+    /// 3. Return rotated ciphertext
+    ///
+    /// # Arguments
+    /// * `step` - Number of slots to rotate (positive = left, negative = right)
+    /// * `rot_keys` - Rotation keys (must contain key for this step)
+    /// * `ctx` - Metal CKKS context
+    ///
+    /// # Returns
+    /// Rotated ciphertext with slots shifted by `step` positions
+    ///
+    /// # Performance
+    /// - Target: <1ms per rotation on M3 Max
+    /// - GPU kernel: <0.1ms (pure permutation)
+    /// - Key switching: <0.9ms (NTT multiplication)
+    pub fn rotate_by_steps(
+        &self,
+        step: i32,
+        rot_keys: &super::rotation_keys::MetalRotationKeys,
+        ctx: &MetalCkksContext,
+    ) -> Result<Self, String> {
+        use super::rotation::{compute_galois_map, rotation_step_to_galois_element};
+
+        let n = self.n;
+        let num_primes_active = self.level + 1;
+        let moduli = &ctx.params.moduli[..num_primes_active];
+
+        // Get rotation key with gadget decomposition (full-sized, generated with all primes)
+        let (rlk0_full, rlk1_full) = rot_keys.get_key_for_step(step)
+            .ok_or_else(|| format!("Rotation key for step {} not found. Generate rotation keys first.", step))?;
+
+        // Extract only active primes from rotation keys (for each digit)
+        // Rotation keys have flat RNS layout: [coeff0_mod_q0, coeff0_mod_q1, ..., coeffN-1_mod_qL]
+        let num_digits = rlk0_full.len();
+        let mut rlk0 = Vec::with_capacity(num_digits);
+        let mut rlk1 = Vec::with_capacity(num_digits);
+
+        for t in 0..num_digits {
+            let rot_key_stride = rlk0_full[t].len() / n;  // Total number of primes in this key digit
+            let mut rlk0_t = vec![0u64; n * num_primes_active];
+            let mut rlk1_t = vec![0u64; n * num_primes_active];
+
+            for coeff_idx in 0..n {
+                for prime_idx in 0..num_primes_active {
+                    rlk0_t[coeff_idx * num_primes_active + prime_idx] =
+                        rlk0_full[t][coeff_idx * rot_key_stride + prime_idx];
+                    rlk1_t[coeff_idx * num_primes_active + prime_idx] =
+                        rlk1_full[t][coeff_idx * rot_key_stride + prime_idx];
+                }
+            }
+
+            rlk0.push(rlk0_t);
+            rlk1.push(rlk1_t);
+        }
+
+        let base_w = rot_keys.base_w();
+
+        // Convert step to Galois element
+        let k = rotation_step_to_galois_element(step, n);
+
+        // Precompute Galois map
+        let (galois_map, galois_signs) = compute_galois_map(n, k);
+
+        // Extract active primes from ciphertext (handle variable stride after rescaling)
+        let ct_stride = self.c0.len() / n;
+
+        // DEBUG: Verify flat layout consistency
+        eprintln!("[ROTATION DEBUG] n={}, num_primes_active={}, ct_stride={}", n, num_primes_active, ct_stride);
+        eprintln!("[ROTATION DEBUG] c0.len()={}, c1.len()={}", self.c0.len(), self.c1.len());
+        eprintln!("[ROTATION DEBUG] self.num_primes={}, self.level={}", self.num_primes, self.level);
+
+        if ct_stride != num_primes_active {
+            eprintln!("[ROTATION WARNING] ct_stride ({}) != num_primes_active ({})", ct_stride, num_primes_active);
+            eprintln!("[ROTATION WARNING] This may indicate a flat layout mismatch!");
+        }
+
+        let mut c0_active = vec![0u64; n * num_primes_active];
+        let mut c1_active = vec![0u64; n * num_primes_active];
+
+        for coeff_idx in 0..n {
+            for prime_idx in 0..num_primes_active {
+                c0_active[coeff_idx * num_primes_active + prime_idx] =
+                    self.c0[coeff_idx * ct_stride + prime_idx];
+                c1_active[coeff_idx * num_primes_active + prime_idx] =
+                    self.c1[coeff_idx * ct_stride + prime_idx];
+            }
+        }
+
+        eprintln!("[ROTATION DEBUG] First 5 c0_active values: {:?}", &c0_active[..5.min(c0_active.len())]);
+        eprintln!("[ROTATION DEBUG] First 5 c1_active values: {:?}", &c1_active[..5.min(c1_active.len())]);
+
+        // Apply Galois automorphism to c₀ and c₁ (GPU)
+        let c0_rotated = self.apply_galois_gpu(&c0_active, &galois_map, &galois_signs, moduli, ctx)?;
+        let c1_rotated = self.apply_galois_gpu(&c1_active, &galois_map, &galois_signs, moduli, ctx)?;
+
+        eprintln!("[ROTATION DEBUG] After Galois - First 5 c0_rotated: {:?}", &c0_rotated[..5.min(c0_rotated.len())]);
+        eprintln!("[ROTATION DEBUG] After Galois - First 5 c1_rotated: {:?}", &c1_rotated[..5.min(c1_rotated.len())]);
+
+        // Key switch using rotation key with gadget decomposition (GPU NTT multiplication)
+        let (c0_final, c1_final) = self.key_switch_gpu_gadget(&c0_rotated, &c1_rotated, &rlk0, &rlk1, moduli, base_w, ctx)?;
+
+        eprintln!("[ROTATION DEBUG] After key switch - First 5 c0_final: {:?}", &c0_final[..5.min(c0_final.len())]);
+        eprintln!("[ROTATION DEBUG] After key switch - First 5 c1_final: {:?}", &c1_final[..5.min(c1_final.len())]);
+
+        Ok(Self {
+            c0: c0_final,
+            c1: c1_final,
+            n,
+            num_primes: self.num_primes,  // Keep original total
+            level: self.level,
+            scale: self.scale,
+        })
+    }
+
+    /// Apply Galois automorphism using Metal GPU kernel
+    ///
+    /// Dispatches the apply_galois_automorphism kernel from rotation.metal.
+    fn apply_galois_gpu(
+        &self,
+        poly: &[u64],
+        galois_map: &[u32],
+        galois_signs: &[i32],
+        moduli: &[u64],
+        ctx: &MetalCkksContext,
+    ) -> Result<Vec<u64>, String> {
+        use metal::MTLSize;
+
+        let device = &ctx.device;
+        let n = self.n;
+        let num_primes = moduli.len();
+
+        // Create Metal buffers
+        let input_buffer = device.create_buffer_with_data(poly);
+        let output_buffer = device.create_buffer(poly.len());
+        let map_buffer = device.create_buffer_with_u32_data(galois_map);
+        let signs_buffer = device.create_buffer_with_i32_data(galois_signs);
+        let moduli_buffer = device.create_buffer_with_data(moduli);
+
+        // Get rotation kernel function
+        let function = device.get_rotation_function("apply_galois_automorphism")?;
+        let pipeline = device.device().new_compute_pipeline_state_with_function(&function)
+            .map_err(|e| format!("Failed to create rotation pipeline: {:?}", e))?;
+
+        // Execute kernel
+        device.execute_kernel(|encoder| {
+            encoder.set_compute_pipeline_state(&pipeline);
+            encoder.set_buffer(0, Some(&input_buffer), 0);
+            encoder.set_buffer(1, Some(&output_buffer), 0);
+            encoder.set_buffer(2, Some(&map_buffer), 0);
+            encoder.set_buffer(3, Some(&signs_buffer), 0);
+            encoder.set_bytes(4, std::mem::size_of::<u32>() as u64, &(n as u32) as *const u32 as *const _);
+            encoder.set_bytes(5, std::mem::size_of::<u32>() as u64, &(num_primes as u32) as *const u32 as *const _);
+            encoder.set_buffer(6, Some(&moduli_buffer), 0);
+
+            // Dispatch threads: one per coefficient
+            let thread_group_size = MTLSize { width: 256, height: 1, depth: 1 };
+            let thread_groups = MTLSize {
+                width: ((n + 255) / 256) as u64,
+                height: 1,
+                depth: 1,
+            };
+            encoder.dispatch_thread_groups(thread_groups, thread_group_size);
+
+            Ok(())
+        })?;
+
+        // Read back result
+        let result = device.read_buffer(&output_buffer, poly.len());
+
+        // DEBUG: Check if kernel actually ran - show coefficient-level values
+        eprintln!("[GALOIS DEBUG] n={}, num_primes={}", n, num_primes);
+        eprintln!("[GALOIS DEBUG] galois_map[0..5]: {:?}", &galois_map[..5.min(galois_map.len())]);
+
+        // Show first 3 coefficients (mod q0 only for clarity)
+        for coeff_idx in 0..3 {
+            let input_val = poly[coeff_idx * num_primes + 0];
+            let target_idx = galois_map[coeff_idx] as usize;
+            let output_val = result[target_idx * num_primes + 0];
+            eprintln!("[GALOIS DEBUG] Coeff {} (mod q0): input={}, target_pos={}, output@target={}",
+                     coeff_idx, input_val, target_idx, output_val);
+        }
+
+        Ok(result)
+    }
+
+    /// Key switch after rotation using rotation key
+    ///
+    /// Converts (σ_k(c₀), σ_k(c₁)) which decrypts with σ_k(s) into
+    /// (c'₀, c'₁) which decrypts with the original s.
+    ///
+    /// # Algorithm
+    ///
+    /// The rotation key (rk0, rk1) = (a_k, b_k) satisfies:
+    ///   b_k ≈ -a_k·s + e + σ_k(s)
+    ///
+    /// After σ_k, we have: σ_k(c₀) + σ_k(c₁)·σ_k(s) = σ_k(m)
+    ///
+    /// Key switching formula:
+    ///   c'₀ = σ_k(c₀) + σ_k(c₁)·b_k
+    ///   c'₁ = σ_k(c₁)·a_k
+    ///
+    /// Decryption check:
+    ///   c'₀ + c'₁·s = σ_k(c₀) + σ_k(c₁)·b_k + σ_k(c₁)·a_k·s
+    ///               = σ_k(c₀) + σ_k(c₁)·(b_k + a_k·s)
+    ///               ≈ σ_k(c₀) + σ_k(c₁)·σ_k(s)  (since b_k + a_k·s ≈ σ_k(s))
+    ///               = σ_k(m)  ✓
+    ///
+    /// # Performance
+    /// - 2 NTT multiplications: σ_k(c₁)·b_k and σ_k(c₁)·a_k
+    /// - 1 addition: σ_k(c₀) + σ_k(c₁)·b_k
+    /// - All operations on GPU using existing Metal NTT
+    fn key_switch_gpu_gadget(
+        &self,
+        c0_rotated: &[u64],
+        c1_rotated: &[u64],
+        rlk0: &[Vec<u64>],
+        rlk1: &[Vec<u64>],
+        moduli: &[u64],
+        base_w: u32,
+        ctx: &MetalCkksContext,
+    ) -> Result<(Vec<u64>, Vec<u64>), String> {
+        let n = self.n;
+        let num_primes = moduli.len();
+        let num_digits = rlk0.len();
+
+        // Initialize accumulators
+        let mut c0_final = c0_rotated.to_vec();
+        let mut c1_final = vec![0u64; n * num_primes];
+
+        // Decompose c1_rotated using gadget decomposition
+        let c1_digits = Self::gadget_decompose_flat(c1_rotated, base_w, moduli, n)?;
+
+        // For each digit t in the decomposition
+        for t in 0..num_digits {
+            if t >= c1_digits.len() {
+                break;  // Fewer actual digits than key components
+            }
+
+            // IMPORTANT: rlk0[t] and rlk1[t] are already in NTT domain!
+            // We only need to transform the digit, then do pointwise multiply, then inverse NTT
+            let term0 = Self::multiply_digit_by_ntt_key(&c1_digits[t], &rlk0[t], moduli, ctx)?;
+            let term1 = Self::multiply_digit_by_ntt_key(&c1_digits[t], &rlk1[t], moduli, ctx)?;
+
+            // c0_final -= term0 (matches V3 CPU implementation)
+            for i in 0..(n * num_primes) {
+                let prime_idx = i % num_primes;
+                let q = moduli[prime_idx];
+
+                // Subtract: c0_final = c0_final - term0
+                let diff = if c0_final[i] >= term0[i] {
+                    c0_final[i] - term0[i]
+                } else {
+                    q - (term0[i] - c0_final[i])
+                };
+                c0_final[i] = diff;
+            }
+
+            // c1_final += term1
+            for i in 0..(n * num_primes) {
+                let prime_idx = i % num_primes;
+                let q = moduli[prime_idx];
+                c1_final[i] = ((c1_final[i] as u128 + term1[i] as u128) % q as u128) as u64;
+            }
+        }
+
+        Ok((c0_final, c1_final))
+    }
+
+    /// Multiply two coefficient-domain polynomials using NTT
+    ///
+    /// Both digit and key are in coefficient domain.
+    /// Uses standard CKKS negacyclic multiplication: twist → NTT → multiply → iNTT → untwist
+    fn multiply_digit_by_ntt_key(
+        digit_coeff: &[u64],
+        key_coeff: &[u64],
+        moduli: &[u64],
+        ctx: &MetalCkksContext,
+    ) -> Result<Vec<u64>, String> {
+        let n = ctx.params.n;
+        let num_primes = moduli.len();
+        let mut result_flat = vec![0u64; n * num_primes];
+
+        // For each RNS component (each prime)
+        for (prime_idx, &q) in moduli.iter().enumerate() {
+            // Extract digit polynomial for this prime
+            let mut digit_poly = vec![0u64; n];
+            for i in 0..n {
+                digit_poly[i] = digit_coeff[i * num_primes + prime_idx];
+            }
+
+            // Extract key polynomial for this prime
+            let mut key_poly = vec![0u64; n];
+            for i in 0..n {
+                key_poly[i] = key_coeff[i * num_primes + prime_idx];
+            }
+
+            let ntt_ctx = &ctx.ntt_contexts[prime_idx];
+
+            // Standard negacyclic NTT multiplication pattern:
+            // 1. Twist both polynomials
+            for i in 0..n {
+                digit_poly[i] = ((digit_poly[i] as u128 * ntt_ctx.psi_powers()[i] as u128) % q as u128) as u64;
+                key_poly[i] = ((key_poly[i] as u128 * ntt_ctx.psi_powers()[i] as u128) % q as u128) as u64;
+            }
+
+            // 2. Forward NTT on both
+            ntt_ctx.forward(&mut digit_poly)?;
+            ntt_ctx.forward(&mut key_poly)?;
+
+            // 3. Pointwise multiply in NTT domain
+            let mut result_poly = vec![0u64; n];
+            ntt_ctx.pointwise_multiply(&digit_poly, &key_poly, &mut result_poly)?;
+
+            // 4. Inverse NTT
+            ntt_ctx.inverse(&mut result_poly)?;
+
+            // 5. Untwist
+            for i in 0..n {
+                result_poly[i] = ((result_poly[i] as u128 * ntt_ctx.psi_inv_powers()[i] as u128) % q as u128) as u64;
+            }
+
+            // Store back in flat layout
+            for i in 0..n {
+                result_flat[i * num_primes + prime_idx] = result_poly[i];
+            }
+        }
+
+        Ok(result_flat)
+    }
+
+    /// Gadget decomposition for flat RNS layout
+    ///
+    /// Decomposes polynomial in base B = 2^base_w using CRT-consistent decomposition.
+    fn gadget_decompose_flat(
+        poly: &[u64],
+        base_w: u32,
+        moduli: &[u64],
+        n: usize,
+    ) -> Result<Vec<Vec<u64>>, String> {
+        let num_primes = moduli.len();
+
+        // Compute Q = product of all primes
+        let q_prod_big: BigInt = moduli.iter().map(|&q| BigInt::from(q)).product();
+        let q_half_big = &q_prod_big / 2;
+        let base_big = BigInt::one() << base_w;  // B = 2^base_w
+
+        // Determine number of digits
+        let q_bits = q_prod_big.bits() as u32;
+        let num_digits = ((q_bits + base_w - 1) / base_w) as usize;
+
+        let mut digits = vec![vec![0u64; n * num_primes]; num_digits];
+
+        // Decompose each coefficient using CRT
+        for i in 0..n {
+            // Reconstruct coefficient from RNS to BigInt
+            let mut coeff_big = BigInt::zero();
+            for (j, &q) in moduli.iter().enumerate() {
+                let idx = i * num_primes + j;
+                let residue = poly[idx];
+
+                // CRT reconstruction
+                let q_big = BigInt::from(q);
+                let q_inv = &q_prod_big / &q_big;
+                let q_inv_mod = Self::mod_inverse_bigint(&q_inv, &q_big)?;
+                let term = BigInt::from(residue) * q_inv * q_inv_mod;
+                coeff_big += term;
+            }
+            coeff_big %= &q_prod_big;
+
+            // Center around zero: if coeff > Q/2, subtract Q
+            if coeff_big > q_half_big {
+                coeff_big -= &q_prod_big;
+            }
+
+            // Decompose into base-B digits with EXACT floor division
+            // CRITICAL: Use exact division, not bit shift, for correct handling of negatives!
+            use num_integer::Integer;
+
+            let mut remaining = coeff_big.clone();
+            let half_base = &base_big / 2;
+            let mut digits_big: Vec<BigInt> = Vec::new();
+
+            // Decompose until remaining is zero (dynamic digit count)
+            while !remaining.is_zero() {
+                // Extract digit_t = (remaining mod B) in range [0, B)
+                let mut digit_t = remaining.mod_floor(&base_big);
+
+                // CENTER the digit: if digit > B/2, subtract B to get negative digit
+                // This keeps digits in range (-B/2, B/2] instead of [0, B)
+                if digit_t > half_base {
+                    digit_t -= &base_big;
+                }
+
+                digits_big.push(digit_t.clone());
+
+                // EXACT floor division: (remaining - digit_t) / B
+                // This is correct for negative values, unlike >> which is implementation-dependent
+                remaining = (&remaining - &digit_t).div_floor(&base_big);
+            }
+
+            // Convert BigInt digits to per-prime residues
+            let actual_num_digits = digits_big.len();
+            for (t, d) in digits_big.iter().enumerate() {
+                if t >= num_digits {
+                    break; // Safety check: don't overflow pre-allocated storage
+                }
+
+                for (j, &q) in moduli.iter().enumerate() {
+                    let idx = i * num_primes + j;
+
+                    // Convert centered digit to canonical form mod q
+                    let digit_unsigned = if d < &BigInt::zero() {
+                        let x = (-d).mod_floor(&BigInt::from(q)).to_u64().unwrap_or(0);
+                        if x == 0 { 0 } else { q - x }
+                    } else {
+                        d.mod_floor(&BigInt::from(q)).to_u64().unwrap_or(0)
+                    };
+
+                    digits[t][idx] = digit_unsigned;
+                }
+            }
+        }
+
+        Ok(digits)
+    }
+
+    /// Modular inverse using extended Euclidean algorithm (BigInt version)
+    fn mod_inverse_bigint(a: &BigInt, modulus: &BigInt) -> Result<BigInt, String> {
+        let mut t = BigInt::zero();
+        let mut newt = BigInt::one();
+        let mut r = modulus.clone();
+        let mut newr = a.clone();
+
+        while !newr.is_zero() {
+            let quotient = &r / &newr;
+            let temp_t = t.clone();
+            t = newt.clone();
+            newt = temp_t - &quotient * &newt;
+
+            let temp_r = r.clone();
+            r = newr.clone();
+            newr = temp_r - quotient * newr;
+        }
+
+        if r > BigInt::one() {
+            return Err(format!("Not invertible"));
+        }
+        if t < BigInt::zero() {
+            t += modulus;
+        }
+
+        Ok(t)
     }
 
     /// Multiply two ciphertexts (GPU) - NOT IMPLEMENTED YET

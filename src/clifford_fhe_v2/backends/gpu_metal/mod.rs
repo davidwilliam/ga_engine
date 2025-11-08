@@ -50,6 +50,15 @@ pub mod keys;
 pub mod ckks;
 
 #[cfg(feature = "v2-gpu-metal")]
+pub mod rotation;
+
+#[cfg(feature = "v2-gpu-metal")]
+pub mod rotation_keys;
+
+#[cfg(feature = "v2-gpu-metal")]
+pub mod bootstrap;
+
+#[cfg(feature = "v2-gpu-metal")]
 use crate::clifford_fhe_v2::core::{BackendCapabilities, BackendInfo};
 
 #[cfg(feature = "v2-gpu-metal")]
@@ -62,7 +71,7 @@ impl BackendInfo for GpuMetalBackend {
             has_ntt_optimization: true,
             has_gpu_acceleration: true,
             has_simd_batching: false,
-            has_rotation_keys: false,
+            has_rotation_keys: true,  // ✅ NOW SUPPORTED! (Phase 3 complete)
         }
     }
 

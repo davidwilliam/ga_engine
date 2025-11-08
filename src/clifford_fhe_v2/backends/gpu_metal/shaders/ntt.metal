@@ -82,8 +82,20 @@ inline ulong mul_mod_slow(ulong a, ulong b, ulong q) {
     }
 }
 
-/// Compatibility wrapper - will be replaced with Montgomery everywhere
-/// For now, use slow version to maintain existing interface
+/// Modular multiplication wrapper
+/// Since all data is pre-converted to Montgomery domain by the Rust code,
+/// we use Montgomery multiplication here for correctness and speed.
+/// @param a First operand (in Montgomery domain)
+/// @param b Second operand (in Montgomery domain)
+/// @param q Modulus
+/// @param q_inv Precomputed -q^{-1} mod 2^64
+/// @return (a * b * R^{-1}) mod q (stays in Montgomery domain)
+inline ulong mul_mod(ulong a, ulong b, ulong q, ulong q_inv) {
+    return mont_mul(a, b, q, q_inv);
+}
+
+/// DEPRECATED: 3-argument version for backwards compatibility with old unused kernels
+/// This will use the slow/broken path - DO NOT USE in new code!
 inline ulong mul_mod(ulong a, ulong b, ulong q) {
     return mul_mod_slow(a, b, q);
 }
@@ -100,15 +112,16 @@ inline ulong sub_mod(ulong a, ulong b, ulong q) {
 }
 
 /// Modular exponentiation: base^exp mod q (for twiddle factor generation)
-inline ulong pow_mod(ulong base, ulong exp, ulong q) {
+/// NOTE: This should never be called in optimized code - twiddles are precomputed on CPU!
+inline ulong pow_mod(ulong base, ulong exp, ulong q, ulong q_inv) {
     ulong result = 1;
     base = base % q;
 
     while (exp > 0) {
         if (exp & 1) {
-            result = mul_mod(result, base, q);
+            result = mul_mod(result, base, q, q_inv);
         }
-        base = mul_mod(base, base, q);
+        base = mul_mod(base, base, q, q_inv);
         exp >>= 1;
     }
 
@@ -182,9 +195,10 @@ kernel void ntt_forward_stage(
     }
 }
 
-/// OLD single-dispatch NTT (BUGGY - no global sync between stages)
-/// Kept for reference but should not be used
-kernel void ntt_forward_single_dispatch_BUGGY(
+/* OLD single-dispatch NTT (BUGGY - no global sync between stages)
+   REMOVED - do not use, has race conditions
+
+kernel void ntt_forward_single_dispatch_BUGGY_REMOVED(
     device ulong* coeffs [[buffer(0)]],
     constant ulong* twiddles [[buffer(1)]],
     constant uint& n [[buffer(2)]],
@@ -240,6 +254,7 @@ kernel void ntt_forward_single_dispatch_BUGGY(
         threadgroup_barrier(mem_flags::mem_device);  // DOES NOT WORK GLOBALLY!
     }
 }
+*/
 
 /// Single-stage inverse NTT butterfly (Gentleman-Sande) with Montgomery multiplication
 /// One dispatch per stage - provides global synchronization

@@ -226,6 +226,59 @@ impl CliffordFHEParams {
         Self { n, moduli, scale, error_std: 3.2, security: SecurityLevel::Bit256, inv_scale_mod_q, inv_q_top_mod_q, kappa_plain_mul }
     }
 
+    /// V3 Bootstrap parameters for Metal GPU (N=1024, 20 primes)
+    ///
+    /// Designed for full CoeffToSlot + SlotToCoeff bootstrap on Metal GPU.
+    ///
+    /// **Level budget:**
+    /// - CoeffToSlot: log2(N/2) = log2(512) = 9 levels
+    /// - SlotToCoeff: log2(N/2) = log2(512) = 9 levels
+    /// - Total: 18 levels required
+    /// - We use 20 primes (19 levels) to have margin for EvalMod
+    ///
+    /// **Performance target:**
+    /// - <2s for CoeffToSlot + SlotToCoeff on M3 Max
+    /// - 36-72× faster than CPU-only V3 (~360s baseline)
+    ///
+    /// **Note:** Uses dynamic prime generation from V3 module
+    ///
+    #[cfg(feature = "v3")]
+    pub fn new_v3_bootstrap_metal() -> Result<Self, String> {
+        use crate::clifford_fhe_v3::prime_gen::{generate_special_modulus, generate_ntt_primes};
+
+        let n = 1024;
+
+        println!("Generating V3 Metal GPU bootstrap parameters (N={}, 20 primes)...", n);
+
+        // Generate special 60-bit modulus (provides extra precision)
+        let special_modulus = generate_special_modulus(n, 60);
+
+        // Generate 19 scaling primes (~45-bit for precision)
+        let scaling_primes = generate_ntt_primes(n, 19, 45, 0);
+
+        // Combine: special prime first, then scaling primes
+        let mut moduli = vec![special_modulus];
+        moduli.extend(scaling_primes);
+
+        let scale = 2f64.powi(45);  // 45-bit scale for precision
+        let inv_scale_mod_q = Self::precompute_inv_scale_mod_q(scale, &moduli);
+        let inv_q_top_mod_q = Self::precompute_inv_q_top_mod_q(&moduli);
+        let kappa_plain_mul = (n as f64 / 2.0) * 1.46;
+
+        println!("  ✅ Generated {} NTT-friendly primes", moduli.len());
+
+        Ok(Self {
+            n,
+            moduli,
+            scale,
+            error_std: 3.2,
+            security: SecurityLevel::Bit128,
+            inv_scale_mod_q,
+            inv_q_top_mod_q,
+            kappa_plain_mul,
+        })
+    }
+
     /// Get the prime for a specific level in the modulus chain
     pub fn modulus_at_level(&self, level: usize) -> u64 {
         if level >= self.moduli.len() {

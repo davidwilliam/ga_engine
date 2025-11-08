@@ -541,7 +541,8 @@ mod tests {
         // Basic sanity checks
         assert_eq!(pk.a.len(), params.n);
         assert_eq!(sk.coeffs.len(), params.n);
-        assert_eq!(evk.a.len(), params.n);
+        assert!(evk.evk0.len() > 0, "EvaluationKey should have at least one digit");
+        assert_eq!(evk.evk0[0].len(), params.n, "Each evk component should have n coefficients");
 
         println!("Metal key generation test passed!");
     }
