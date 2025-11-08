@@ -614,7 +614,7 @@ impl Ciphertext {
     }
 
     /// Rescale a single coefficient: CRT reconstruct, divide by q_top, re-encode to RNS
-    fn rescale_coeff_bigint(limbs: &[u64], moduli: &[u64], q_top: u64) -> Vec<u64> {
+    pub fn rescale_coeff_bigint(limbs: &[u64], moduli: &[u64], q_top: u64) -> Vec<u64> {
         // 1. CRT reconstruct with centered residues
         let c_full = Self::crt_reconstruct_centered(limbs, moduli);
 

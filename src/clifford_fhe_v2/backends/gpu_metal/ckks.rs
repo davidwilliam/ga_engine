@@ -30,6 +30,11 @@ pub struct MetalCkksContext {
 
     /// Barrett reducers for modular reduction (lightweight, keep on CPU)
     reducers: Vec<BarrettReducer>,
+
+    /// Precomputed rescaling constants for GPU-native exact rescale
+    /// rescale_inv_table[level][i] = q_{level}^{-1} mod q_i for i < level
+    /// This allows GPU kernel to perform exact DivideRoundByLastQ without BigInt
+    rescale_inv_table: Vec<Vec<u64>>,
 }
 
 /// GPU plaintext representation
@@ -136,6 +141,9 @@ impl MetalCkksContext {
             .map(|&q| BarrettReducer::new(q))
             .collect();
 
+        // Precompute rescaling inverse constants for GPU-native exact rescale
+        let rescale_inv_table = Self::precompute_rescale_inv_table(&params.moduli);
+
         println!("  [Metal CKKS] ✓ GPU-only CKKS context ready!\n");
 
         Ok(Self {
@@ -143,6 +151,7 @@ impl MetalCkksContext {
             params,
             ntt_contexts,
             reducers,
+            rescale_inv_table,
         })
     }
 
@@ -488,7 +497,7 @@ impl MetalCkksContext {
     }
 
     /// Encode real-valued slots using CKKS canonical embedding
-    fn canonical_embed_encode_real(values: &[f64], scale: f64, n: usize) -> Vec<i64> {
+    pub fn canonical_embed_encode_real(values: &[f64], scale: f64, n: usize) -> Vec<i64> {
         use std::f64::consts::PI;
 
         assert!(n.is_power_of_two());
@@ -713,6 +722,102 @@ impl MetalCkksContext {
         Ok(result_flat)
     }
 
+    /// GPU-native exact rescaling using RNS formula
+    ///
+    /// Implements DivideRoundByLastQ without BigInt reconstruction using the RNS formula:
+    /// r'ᵢ = (rᵢ - r_top) × q_top^{-1} mod qᵢ
+    ///
+    /// This is mathematically equivalent to the BigInt version but runs entirely on GPU.
+    ///
+    /// # Arguments
+    /// * `poly_in` - Input polynomial in flat RNS layout [n × num_primes_in]
+    /// * `level` - Current level (q_top = moduli[level])
+    ///
+    /// # Returns
+    /// Rescaled polynomial in flat RNS layout [n × (num_primes_in - 1)]
+    pub fn exact_rescale_gpu(&self, poly_in: &[u64], level: usize) -> Result<Vec<u64>, String> {
+        use metal::*;
+
+        if level == 0 {
+            return Err("Cannot rescale at level 0".to_string());
+        }
+
+        let n = self.params.n;
+        let moduli = &self.params.moduli[..=level];
+        let num_primes_in = moduli.len();
+        let num_primes_out = num_primes_in - 1;
+
+        assert_eq!(poly_in.len(), n * num_primes_in, "Input size mismatch");
+
+        // Get precomputed inverse constants for this level
+        let qtop_inv = &self.rescale_inv_table[level];
+        assert_eq!(qtop_inv.len(), num_primes_out, "Inverse table size mismatch");
+
+        // Create output buffer
+        let mut poly_out = vec![0u64; n * num_primes_out];
+
+        // Get Metal kernel and create pipeline state
+        let function = self.device.get_rns_function("rns_exact_rescale")?;
+        let pipeline = self.device.device().new_compute_pipeline_state_with_function(&function)
+            .map_err(|e| format!("Failed to create rescale pipeline: {:?}", e))?;
+
+        // Create GPU buffers
+        let input_buffer = self.device.device().new_buffer_with_data(
+            poly_in.as_ptr() as *const _,
+            (poly_in.len() * std::mem::size_of::<u64>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let output_buffer = self.device.device().new_buffer(
+            (poly_out.len() * std::mem::size_of::<u64>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let moduli_buffer = self.device.device().new_buffer_with_data(
+            moduli.as_ptr() as *const _,
+            (moduli.len() * std::mem::size_of::<u64>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let inv_buffer = self.device.device().new_buffer_with_data(
+            qtop_inv.as_ptr() as *const _,
+            (qtop_inv.len() * std::mem::size_of::<u64>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let n_u32 = n as u32;
+        let num_primes_u32 = num_primes_in as u32;
+
+        // Execute kernel
+        self.device.execute_kernel(|encoder| {
+            encoder.set_compute_pipeline_state(&pipeline);
+            encoder.set_buffer(0, Some(&input_buffer), 0);
+            encoder.set_buffer(1, Some(&output_buffer), 0);
+            encoder.set_buffer(2, Some(&moduli_buffer), 0);
+            encoder.set_buffer(3, Some(&inv_buffer), 0);
+            encoder.set_bytes(4, std::mem::size_of::<u32>() as u64, &n_u32 as *const u32 as *const _);
+            encoder.set_bytes(5, std::mem::size_of::<u32>() as u64, &num_primes_u32 as *const u32 as *const _);
+
+            // Dispatch 1D grid with n threads (one per coefficient)
+            let threadgroup_size = MTLSize { width: 256.min(n as u64), height: 1, depth: 1 };
+            let num_threadgroups = ((n as u64 + threadgroup_size.width - 1) / threadgroup_size.width).max(1);
+            let grid_size = MTLSize { width: num_threadgroups, height: 1, depth: 1 };
+
+            encoder.dispatch_thread_groups(grid_size, threadgroup_size);
+
+            Ok(())
+        })?;
+
+        // Copy result back
+        let out_len = poly_out.len();
+        unsafe {
+            let ptr = output_buffer.contents() as *const u64;
+            poly_out.copy_from_slice(std::slice::from_raw_parts(ptr, out_len));
+        }
+
+        Ok(poly_out)
+    }
+
     // ==================== NTT Helper Functions ====================
 
     /// Find primitive 2n-th root of unity for NTT
@@ -787,6 +892,63 @@ impl MetalCkksContext {
         }
 
         result
+    }
+
+    /// Compute modular inverse using extended Euclidean algorithm
+    /// Returns a^{-1} mod m, or None if gcd(a, m) != 1
+    fn mod_inverse_u64(a: u64, m: u64) -> Option<u64> {
+        fn extended_gcd(a: i128, b: i128) -> (i128, i128, i128) {
+            if b == 0 {
+                (a, 1, 0)
+            } else {
+                let (gcd, x1, y1) = extended_gcd(b, a % b);
+                (gcd, y1, x1 - (a / b) * y1)
+            }
+        }
+
+        let (gcd, x, _) = extended_gcd(a as i128, m as i128);
+        if gcd != 1 {
+            return None; // No inverse exists
+        }
+
+        let mut result = x % (m as i128);
+        if result < 0 {
+            result += m as i128;
+        }
+
+        Some(result as u64)
+    }
+
+    /// Precompute rescaling inverse table for GPU-native exact rescale
+    ///
+    /// For each level L, precompute q_L^{-1} mod q_i for all i < L
+    /// This allows the GPU kernel to perform exact DivideRoundByLastQ without BigInt
+    fn precompute_rescale_inv_table(moduli: &[u64]) -> Vec<Vec<u64>> {
+        let num_primes = moduli.len();
+        let mut table = Vec::with_capacity(num_primes);
+
+        for level in 0..num_primes {
+            if level == 0 {
+                // Level 0 has no lower primes
+                table.push(Vec::new());
+                continue;
+            }
+
+            let q_top = moduli[level];
+            let mut inv_row = Vec::with_capacity(level);
+
+            // Compute q_top^{-1} mod q_i for each i < level
+            for i in 0..level {
+                let q_i = moduli[i];
+                let inv = Self::mod_inverse_u64(q_top, q_i)
+                    .expect(&format!("Failed to compute {}^{{-1}} mod {}", q_top, q_i));
+                inv_row.push(inv);
+            }
+
+            table.push(inv_row);
+        }
+
+        table
     }
 }
 

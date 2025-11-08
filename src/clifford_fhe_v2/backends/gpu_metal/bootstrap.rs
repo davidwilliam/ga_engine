@@ -287,20 +287,18 @@ fn encode_diagonal_for_metal(
         return Err(format!("Diagonal size mismatch: {} vs {}", diagonal.len(), num_slots));
     }
 
-    // CKKS encoding: diagonal values go in first N/2 coefficients
-    // Remaining N/2 coefficients are complex conjugates (or zeros for real encoding)
-    let mut coeffs_f64 = vec![0.0; n];
-    for i in 0..num_slots {
-        coeffs_f64[i] = diagonal[i] * scale;
-    }
+    // CRITICAL: Use canonical embedding (same as V3 CPU and V2 CPU)
+    // Simple scaling does NOT work with Galois automorphisms!
+    // We need proper FFT-based slot encoding.
+    use crate::clifford_fhe_v2::backends::gpu_metal::ckks::MetalCkksContext;
+    let coeffs_i64 = MetalCkksContext::canonical_embed_encode_real(diagonal, scale, n);
 
     // Convert to RNS representation (flat layout)
     let num_primes = level + 1;  // Only use primes up to current level
     let mut flat_rns = vec![0u64; n * num_primes];
 
     for coeff_idx in 0..n {
-        let val = coeffs_f64[coeff_idx];
-        let val_i64 = val.round() as i64;
+        let val_i64 = coeffs_i64[coeff_idx];
 
         for prime_idx in 0..num_primes {
             let q = moduli[prime_idx];
@@ -308,7 +306,11 @@ fn encode_diagonal_for_metal(
                 (val_i64 as u64) % q
             } else {
                 let abs_val = (-val_i64) as u64;
-                q - (abs_val % q)
+                if abs_val % q == 0 {
+                    0
+                } else {
+                    q - (abs_val % q)
+                }
             };
 
             // Flat RNS layout: [coeff0_mod_q0, coeff0_mod_q1, ..., coeff1_mod_q0, ...]
@@ -445,25 +447,50 @@ impl MetalCiphertext {
         // Multiply c1 * pt (GPU NTT multiplication)
         let c1_mul = ctx.multiply_polys_flat_ntt_negacyclic(&c1_active, pt, &moduli)?;
 
-        // Rescale: drop top modulus and scale down
+        // HYBRID RESCALE: Use CPU's exact BigInt CRT rescaling
+        //
+        // NOTE: GPU-native RNS rescaling was attempted using the formula r'ᵢ = (rᵢ - r_top) × q_top^{-1} mod qᵢ
+        // but this approximation doesn't handle CKKS rounding correctly (produced 385k errors vs 3.6e-3 with CPU).
+        // The RNS formula works for BFV-style rescaling but CKKS requires exact centered rounding.
+        //
+        // Future optimization: Implement full BigInt arithmetic on GPU using multi-precision libraries.
+        // For now, the hybrid approach (GPU multiply + CPU rescale) achieves correct results.
+
         let new_level = if self.level > 0 { self.level - 1 } else { 0 };
         let new_num_primes = new_level + 1;
 
-        let q_top = moduli[self.level] as f64;
-        // After ct * pt: scale = ct.scale * pt.scale = self.scale * q_top
-        // After rescale: scale = (self.scale * q_top) / q_top = self.scale
-        let new_scale = self.scale;
+        let q_top = moduli[self.level];
 
-        // Extract only the primes we keep (drop the top one)
+        // After ct * pt: scale = ct.scale * pt.scale = self.scale * q_top
+        let pre_rescale_scale = self.scale * (q_top as f64);
+
+        // After rescale: scale = (self.scale * q_top) / q_top = self.scale
+        let new_scale = pre_rescale_scale / (q_top as f64);
+
+        // EXACT rescaling using CPU's BigInt CRT algorithm
+        use crate::clifford_fhe_v2::backends::cpu_optimized::ckks::Ciphertext as CpuCiphertext;
+
         let mut c0_rescaled = vec![0u64; n * new_num_primes];
         let mut c1_rescaled = vec![0u64; n * new_num_primes];
 
         for coeff_idx in 0..n {
+            // Extract RNS limbs for this coefficient (all primes including top)
+            let mut c0_limbs = vec![0u64; num_primes];
+            let mut c1_limbs = vec![0u64; num_primes];
+
+            for prime_idx in 0..num_primes {
+                c0_limbs[prime_idx] = c0_mul[coeff_idx * num_primes + prime_idx];
+                c1_limbs[prime_idx] = c1_mul[coeff_idx * num_primes + prime_idx];
+            }
+
+            // Apply EXACT rescaling: BigInt CRT + rounded division by q_top
+            let c0_rescaled_limbs = CpuCiphertext::rescale_coeff_bigint(&c0_limbs, &moduli, q_top);
+            let c1_rescaled_limbs = CpuCiphertext::rescale_coeff_bigint(&c1_limbs, &moduli, q_top);
+
+            // Store rescaled residues (now with one fewer prime)
             for prime_idx in 0..new_num_primes {
-                c0_rescaled[coeff_idx * new_num_primes + prime_idx] =
-                    c0_mul[coeff_idx * num_primes + prime_idx];
-                c1_rescaled[coeff_idx * new_num_primes + prime_idx] =
-                    c1_mul[coeff_idx * num_primes + prime_idx];
+                c0_rescaled[coeff_idx * new_num_primes + prime_idx] = c0_rescaled_limbs[prime_idx];
+                c1_rescaled[coeff_idx * new_num_primes + prime_idx] = c1_rescaled_limbs[prime_idx];
             }
         }
 

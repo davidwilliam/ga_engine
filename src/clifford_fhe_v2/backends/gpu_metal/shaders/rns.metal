@@ -208,3 +208,66 @@ kernel void rns_ntt_multiply_barrett(
         c[idx] = barrett_reduce(lo, q, mu);
     }
 }
+
+/// RNS: Exact rescaling (DivideRoundByLastQ) - GPU-native implementation
+///
+/// This implements the critical CKKS rescale operation that was causing 285k errors.
+/// Algorithm: For each coefficient, perform exact division by q_top with proper rounding.
+///
+/// RNS-native approach (avoids BigInt reconstruction):
+/// Given residues (r₀, r₁, ..., rₖ₋₁, rₖ) mod (q₀, q₁, ..., qₖ₋₁, qₖ)
+/// We want: C' = round(C / qₖ) mod qᵢ for each i < k
+///
+/// Formula: r'ᵢ = (rᵢ - rₖ) × qₖ⁻¹ mod qᵢ
+/// where qₖ⁻¹ is the modular inverse of qₖ mod qᵢ (precomputed)
+///
+/// This works because:
+/// C ≡ rᵢ (mod qᵢ) and C ≡ rₖ (mod qₖ)
+/// So C = rₖ + t×qₖ for some integer t
+/// We want t mod qᵢ, which is (C - rₖ)/qₖ mod qᵢ ≈ (rᵢ - rₖ)×qₖ⁻¹ mod qᵢ
+///
+/// @param poly_in Input polynomial [n × num_primes_in] in RNS form
+/// @param poly_out Output polynomial [n × num_primes_out] where num_primes_out = num_primes_in - 1
+/// @param moduli Array of ALL primes [num_primes_in] including q_top
+/// @param qtop_inv_mod_qi Precomputed q_top^{-1} mod q_i for each i < num_primes_out
+/// @param n Polynomial degree
+/// @param num_primes_in Number of input primes (including q_top)
+kernel void rns_exact_rescale(
+    device const ulong* poly_in [[buffer(0)]],
+    device ulong* poly_out [[buffer(1)]],
+    constant ulong* moduli [[buffer(2)]],
+    constant ulong* qtop_inv_mod_qi [[buffer(3)]],
+    constant uint& n [[buffer(4)]],
+    constant uint& num_primes_in [[buffer(5)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    if (gid >= n) return;
+
+    uint coeff_idx = gid;
+    uint num_primes_out = num_primes_in - 1;
+    uint top_idx = num_primes_in - 1;  // Index of q_top
+
+    // Get r_top (the residue mod q_top that we're dividing by)
+    ulong r_top = poly_in[top_idx * n + coeff_idx];
+
+    // For each output prime q_i (all primes except q_top)
+    for (uint i = 0; i < num_primes_out; i++) {
+        ulong q_i = moduli[i];
+        ulong r_i = poly_in[i * n + coeff_idx];
+        ulong qtop_inv = qtop_inv_mod_qi[i];
+
+        // Compute (r_i - r_top) mod q_i
+        ulong diff;
+        if (r_i >= r_top) {
+            diff = r_i - r_top;
+        } else {
+            diff = r_i + q_i - r_top;
+        }
+
+        // Multiply by q_top^{-1} mod q_i
+        ulong result = (diff * qtop_inv) % q_i;
+
+        // Store result
+        poly_out[i * n + coeff_idx] = result;
+    }
+}

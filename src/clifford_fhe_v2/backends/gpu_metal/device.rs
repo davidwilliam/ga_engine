@@ -11,6 +11,7 @@ pub struct MetalDevice {
     command_queue: CommandQueue,
     library: Library,
     rotation_library: Library,
+    rns_library: Library,
 }
 
 impl MetalDevice {
@@ -36,11 +37,17 @@ impl MetalDevice {
         let rotation_library = device.new_library_with_source(rotation_source, &CompileOptions::new())
             .map_err(|e| format!("Failed to compile rotation Metal shaders: {:?}", e))?;
 
+        // Load RNS shaders from source (RNS operations including exact rescaling)
+        let rns_source = include_str!("shaders/rns.metal");
+        let rns_library = device.new_library_with_source(rns_source, &CompileOptions::new())
+            .map_err(|e| format!("Failed to compile RNS Metal shaders: {:?}", e))?;
+
         Ok(MetalDevice {
             device,
             command_queue,
             library,
             rotation_library,
+            rns_library,
         })
     }
 
@@ -93,6 +100,12 @@ impl MetalDevice {
     pub fn get_rotation_function(&self, name: &str) -> Result<Function, String> {
         self.rotation_library.get_function(name, None)
             .map_err(|e| format!("Metal rotation function '{}' not found: {:?}", name, e))
+    }
+
+    /// Get Metal function (kernel) by name from RNS library
+    pub fn get_rns_function(&self, name: &str) -> Result<Function, String> {
+        self.rns_library.get_function(name, None)
+            .map_err(|e| format!("Metal RNS function '{}' not found: {:?}", name, e))
     }
 
     /// Execute a compute kernel

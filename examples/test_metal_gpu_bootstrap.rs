@@ -69,7 +69,7 @@ fn main() -> Result<(), String> {
     // Create Metal NTT contexts from params
     let metal_ntt_contexts = create_metal_ntt_contexts(&params, metal_device.clone())?;
 
-    let base_w = 20u32;  // Must match V3 CPU base_w for consistency
+    let base_w = 20u32;  // Must match V3 for correct rotation keys
     let metal_rot_keys = MetalRotationKeys::generate(
         metal_device.clone(),
         &sk,
