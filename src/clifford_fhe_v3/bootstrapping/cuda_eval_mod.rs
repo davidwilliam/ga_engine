@@ -186,15 +186,24 @@ fn cuda_eval_polynomial_bsgs(
     println!("        [DEBUG] x_powers levels: {:?}", x_powers.iter().map(|x| x.level).collect::<Vec<_>>());
 
     // Compute giant step: x^baby_steps
-    let x_giant = if baby_steps < x_powers.len() {
+    let x_giant = if baby_steps <= x_powers.len() {
         x_powers[baby_steps - 1].clone()
     } else {
-        cuda_multiply_ciphertexts(&x_powers[baby_steps - 2], ct, ckks_ctx, relin_keys)?
+        // Need to compute one more power
+        let mut x_base = x_powers[0].clone();
+        while x_base.level > x_powers[baby_steps - 2].level {
+            x_base = cuda_rescale_down(&x_base, ckks_ctx)?;
+        }
+        cuda_multiply_ciphertexts(&x_powers[baby_steps - 2], &x_base, ckks_ctx, relin_keys)?
     };
+    println!("        [DEBUG] x_giant level = {}", x_giant.level);
 
     // Evaluate polynomial in blocks
+    println!("        [DEBUG] Creating result constant at level {}", ct.level);
     let mut result = cuda_create_constant_ciphertext(0.0, ct.n, ct.level, ckks_ctx)?;
+    println!("        [DEBUG] Creating x_giant_power constant at level {}", ct.level);
     let mut x_giant_power = cuda_create_constant_ciphertext(1.0, ct.n, ct.level, ckks_ctx)?;
+    println!("        [DEBUG] Constants created successfully");
 
     for g in 0..giant_steps {
         // Evaluate baby steps for this giant step
@@ -291,6 +300,11 @@ fn cuda_create_constant_ciphertext(
     let values = vec![value; num_slots];
 
     // Encode as plaintext
+    let num_primes_available = ckks_ctx.params().moduli.len();
+    if level >= num_primes_available {
+        return Err(format!("Level {} exceeds available primes {} (level mismatch: {} vs {})",
+                          level, num_primes_available, level, num_primes_available - 1));
+    }
     let scale = ckks_ctx.params().moduli[level] as f64;
     let pt = ckks_ctx.encode(&values, scale, level)?;
 
