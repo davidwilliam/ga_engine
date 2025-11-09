@@ -268,7 +268,19 @@ fn cuda_eval_polynomial_bsgs(
         };
 
         // Multiply by giant step power and add to result
-        let mut term = cuda_multiply_ciphertexts(&baby_sum, &x_giant_power, ckks_ctx, relin_keys)?;
+        // First, match levels before multiplying
+        let mut baby_sum_matched = baby_sum;
+        let mut x_giant_power_matched = x_giant_power.clone();
+        let multiply_target_level = baby_sum_matched.level.min(x_giant_power_matched.level);
+        while baby_sum_matched.level > multiply_target_level {
+            baby_sum_matched = cuda_rescale_down(&baby_sum_matched, ckks_ctx)?;
+        }
+        while x_giant_power_matched.level > multiply_target_level {
+            x_giant_power_matched = cuda_rescale_down(&x_giant_power_matched, ckks_ctx)?;
+        }
+        println!("        [DEBUG] Multiplying baby_sum (level {}) by x_giant_power (level {})",
+                 baby_sum_matched.level, x_giant_power_matched.level);
+        let mut term = cuda_multiply_ciphertexts(&baby_sum_matched, &x_giant_power_matched, ckks_ctx, relin_keys)?;
 
         // Match levels before adding to result
         let target_level = result.level.min(term.level);
