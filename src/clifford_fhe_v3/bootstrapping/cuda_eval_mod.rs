@@ -216,6 +216,7 @@ fn cuda_eval_polynomial_bsgs(
             }
 
             let coeff = coeffs[idx];
+            println!("        [DEBUG] g={}, b={}, idx={}, coeff={:.6}, min_level={}", g, b, idx, coeff, min_level);
             if coeff.abs() > 1e-10 {
                 let mut term = if b == 0 {
                     cuda_create_constant_ciphertext(coeff, ct.n, min_level, ckks_ctx)?
@@ -223,18 +224,23 @@ fn cuda_eval_polynomial_bsgs(
                     let ct_coeff = cuda_create_constant_ciphertext(coeff, ct.n, x_powers[b-1].level, ckks_ctx)?;
                     cuda_multiply_ciphertexts(&ct_coeff, &x_powers[b-1], ckks_ctx, relin_keys)?
                 };
+                println!("          term.level={}, will rescale to {}", term.level, min_level);
 
                 // Rescale term down to min_level if needed
                 while term.level > min_level {
                     term = cuda_rescale_down(&term, ckks_ctx)?;
                 }
+                println!("          after rescale: term.level={}", term.level);
 
                 // Add to baby_sum
+                let baby_sum_level_before = baby_sum.as_ref().map(|s| s.level);
                 baby_sum = if let Some(sum) = baby_sum {
+                    println!("          adding: sum.level={}, term.level={}", sum.level, term.level);
                     Some(cuda_add_ciphertexts(&sum, &term)?)
                 } else {
                     Some(term)
                 };
+                println!("          baby_sum.level after add: {} (was {:?})", baby_sum.as_ref().unwrap().level, baby_sum_level_before);
             }
         }
 
