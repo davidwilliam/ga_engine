@@ -567,6 +567,79 @@ impl CudaCkksContext {
         }
         flat
     }
+
+    /// Add two RNS polynomials using GPU kernel (flat layout)
+    ///
+    /// Computes c[i] = (a[i] + b[i]) % q for each RNS limb
+    ///
+    /// # Arguments
+    /// * `a` - First polynomial in flat RNS layout [n × num_primes]
+    /// * `b` - Second polynomial in flat RNS layout [n × num_primes]
+    /// * `num_primes` - Number of RNS primes to use
+    ///
+    /// # Returns
+    /// Result polynomial in flat RNS layout [n × num_primes]
+    pub fn add_polynomials_gpu(&self, a: &[u64], b: &[u64], num_primes: usize) -> Result<Vec<u64>, String> {
+        use cudarc::driver::LaunchAsync;
+
+        let n = self.params.n;
+        let total_elements = n * num_primes;
+
+        if a.len() < total_elements || b.len() < total_elements {
+            return Err(format!(
+                "Input polynomials too small: expected {}, got {} and {}",
+                total_elements, a.len(), b.len()
+            ));
+        }
+
+        // Copy inputs to GPU
+        let a_gpu = self.device.device.htod_copy(a[..total_elements].to_vec())
+            .map_err(|e| format!("Failed to copy a to GPU: {:?}", e))?;
+        let b_gpu = self.device.device.htod_copy(b[..total_elements].to_vec())
+            .map_err(|e| format!("Failed to copy b to GPU: {:?}", e))?;
+
+        // Allocate output on GPU
+        let c_gpu = self.device.device.alloc_zeros::<u64>(total_elements)
+            .map_err(|e| format!("Failed to allocate GPU memory: {:?}", e))?;
+
+        // Copy moduli to GPU
+        let moduli_gpu = self.device.device.htod_copy(self.params.moduli.clone())
+            .map_err(|e| format!("Failed to copy moduli to GPU: {:?}", e))?;
+
+        // Get kernel function
+        let func = self.device.device.get_func("rns_module", "rns_add")
+            .ok_or_else(|| "rns_add kernel not found".to_string())?;
+
+        // Launch configuration
+        let threads_per_block = 256;
+        let num_blocks = (total_elements + threads_per_block - 1) / threads_per_block;
+        let cfg = cudarc::driver::LaunchConfig {
+            grid_dim: (num_blocks as u32, 1, 1),
+            block_dim: (threads_per_block as u32, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        // Launch kernel: rns_add(a, b, c, moduli, n, num_primes)
+        unsafe {
+            func.launch(
+                cfg,
+                (
+                    &a_gpu,
+                    &b_gpu,
+                    &c_gpu,
+                    &moduli_gpu,
+                    n as u32,
+                    num_primes as u32,
+                ),
+            ).map_err(|e| format!("Failed to launch rns_add kernel: {:?}", e))?;
+        }
+
+        // Copy result back to CPU
+        let result = self.device.device.dtoh_sync_copy(&c_gpu)
+            .map_err(|e| format!("Failed to copy result from GPU: {:?}", e))?;
+
+        Ok(result)
+    }
 }
 
 #[cfg(test)]

@@ -417,6 +417,7 @@ impl CudaRelinKeys {
         c2: &[u64],
         level: usize,
         ntt_contexts: &[super::ntt::CudaNttContext],
+        ckks_ctx: &super::ckks::CudaCkksContext,
     ) -> Result<(Vec<u64>, Vec<u64>), String> {
         let relin_key = self.relin_key.as_ref()
             .ok_or_else(|| "Relinearization key not generated".to_string())?;
@@ -444,12 +445,9 @@ impl CudaRelinKeys {
             // Multiply d_i · a_i using GPU NTT
             let d_a = self.gpu_multiply_flat_ntt(d_i, a_i, num_primes, ntt_contexts)?;
 
-            // Accumulate
-            for i in 0..n * num_primes {
-                let q = self.params.moduli[i / n];
-                c0_acc[i] = (c0_acc[i] + d_b[i]) % q;
-                c1_acc[i] = (c1_acc[i] + d_a[i]) % q;
-            }
+            // Accumulate using GPU kernel (MUCH faster than CPU loop)
+            c0_acc = ckks_ctx.add_polynomials_gpu(&c0_acc, &d_b, num_primes)?;
+            c1_acc = ckks_ctx.add_polynomials_gpu(&c1_acc, &d_a, num_primes)?;
         }
 
         Ok((c0_acc, c1_acc))

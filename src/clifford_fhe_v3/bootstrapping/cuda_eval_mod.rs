@@ -389,6 +389,7 @@ fn cuda_multiply_ciphertexts(
             &c2_flat,
             ct1.level,
             &ckks_ctx.ntt_contexts(),
+            ckks_ctx,
         )?;
 
         // Convert back to strided layout
