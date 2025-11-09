@@ -279,6 +279,56 @@ impl CliffordFHEParams {
         })
     }
 
+    /// V3 CUDA GPU Full Bootstrap Parameters (N=1024, 30 primes)
+    ///
+    /// **Level Budget for Full Bootstrap:**
+    /// - CoeffToSlot: 9 levels
+    /// - EvalMod: 9 levels
+    /// - SlotToCoeff: 9 levels
+    /// - Total: 27 levels minimum (30 primes provides buffer)
+    ///
+    /// **Use for:** Full CUDA GPU bootstrap with EvalMod
+    ///
+    /// **Modulus chain:** 1× 60-bit + 29× 45-bit primes
+    #[cfg(feature = "v3")]
+    pub fn new_v3_bootstrap_cuda_full() -> Result<Self, String> {
+        use crate::clifford_fhe_v3::prime_gen::{generate_special_modulus, generate_ntt_primes};
+
+        let n = 1024;
+
+        println!("Generating V3 CUDA GPU full bootstrap parameters (N={}, 30 primes)...", n);
+
+        // Generate special 60-bit modulus (provides extra precision)
+        let special_modulus = generate_special_modulus(n, 60);
+
+        // Generate 29 scaling primes (~45-bit for precision)
+        let scaling_primes = generate_ntt_primes(n, 29, 45, 0);
+
+        // Combine: special prime first, then scaling primes
+        let mut moduli = vec![special_modulus];
+        moduli.extend(scaling_primes);
+
+        let scale = 2f64.powi(45);  // 45-bit scale for precision
+        let inv_scale_mod_q = Self::precompute_inv_scale_mod_q(scale, &moduli);
+        let inv_q_top_mod_q = Self::precompute_inv_q_top_mod_q(&moduli);
+        let kappa_plain_mul = (n as f64 / 2.0) * 1.46;
+
+        println!("  ✅ Generated {} NTT-friendly primes", moduli.len());
+        println!("  N = {}, num_primes = {}", n, moduli.len());
+        println!("  Level budget: CoeffToSlot(9) + EvalMod(9) + SlotToCoeff(9) = 27 levels used");
+
+        Ok(Self {
+            n,
+            moduli,
+            scale,
+            error_std: 3.2,
+            security: SecurityLevel::Bit128,
+            inv_scale_mod_q,
+            inv_q_top_mod_q,
+            kappa_plain_mul,
+        })
+    }
+
     /// Get the prime for a specific level in the modulus chain
     pub fn modulus_at_level(&self, level: usize) -> u64 {
         if level >= self.moduli.len() {

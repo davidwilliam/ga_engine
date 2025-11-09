@@ -25,11 +25,11 @@ fn main() -> Result<(), String> {
 
     // Step 1: Initialize parameters
     println!("Step 1: Initializing parameters");
-    let params = CliffordFHEParams::new_v3_bootstrap_metal()?;
+    let params = CliffordFHEParams::new_v3_bootstrap_cuda_full()?;
     let n = params.n;
     let num_primes = params.moduli.len();
     let bootstrap_params = BootstrapParams::balanced();
-    println!("  N = {}, num_primes = {}\n", n, num_primes);
+    println!();
 
     // Step 2: Initialize CUDA contexts
     println!("Step 2: Initializing CUDA contexts");
