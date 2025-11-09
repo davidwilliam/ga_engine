@@ -167,9 +167,15 @@ fn cuda_eval_polynomial_bsgs(
     println!("        Using BSGS: baby_steps={}, giant_steps={}", baby_steps, giant_steps);
 
     // Precompute powers of x: x, x², x³, ..., x^baby_steps
+    // Note: Each power will be at a progressively lower level due to rescaling
     let mut x_powers = vec![ct.clone()];
     for i in 1..baby_steps {
-        let x_next = cuda_multiply_ciphertexts(&x_powers[i-1], ct, ckks_ctx, relin_keys)?;
+        // Match levels before multiplying
+        let mut x_base = x_powers[0].clone();
+        while x_base.level > x_powers[i-1].level {
+            x_base = cuda_rescale_down(&x_base, ckks_ctx)?;
+        }
+        let x_next = cuda_multiply_ciphertexts(&x_powers[i-1], &x_base, ckks_ctx, relin_keys)?;
         x_powers.push(x_next);
     }
 
