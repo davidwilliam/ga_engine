@@ -186,7 +186,8 @@ fn cuda_eval_polynomial_bsgs(
 
     for g in 0..giant_steps {
         // Evaluate baby steps for this giant step
-        let mut baby_sum = cuda_create_constant_ciphertext(0.0, ct.n, ct.level, ckks_ctx)?;
+        // We need to track the minimum level we'll encounter
+        let mut baby_sum: Option<CudaCiphertext> = None;
 
         for b in 0..baby_steps {
             let idx = g * baby_steps + b;
@@ -197,18 +198,61 @@ fn cuda_eval_polynomial_bsgs(
             let coeff = coeffs[idx];
             if coeff.abs() > 1e-10 {
                 let term = if b == 0 {
-                    cuda_create_constant_ciphertext(coeff, ct.n, baby_sum.level, ckks_ctx)?
+                    // For b=0, create constant at the target level
+                    // The target level is what we'll get after the giant step multiplication
+                    let target_level = if baby_sum.is_none() {
+                        // First term - we don't know the level yet, use ct.level
+                        ct.level
+                    } else {
+                        baby_sum.as_ref().unwrap().level
+                    };
+                    cuda_create_constant_ciphertext(coeff, ct.n, target_level, ckks_ctx)?
                 } else {
                     let ct_coeff = cuda_create_constant_ciphertext(coeff, ct.n, x_powers[b-1].level, ckks_ctx)?;
                     cuda_multiply_ciphertexts(&ct_coeff, &x_powers[b-1], ckks_ctx, relin_keys)?
                 };
 
-                baby_sum = cuda_add_ciphertexts(&baby_sum, &term)?;
+                // Add to baby_sum, handling level matching
+                baby_sum = if let Some(mut sum) = baby_sum {
+                    // Match levels before adding
+                    if sum.level != term.level {
+                        // Rescale the higher-level ciphertext to match the lower one
+                        if sum.level > term.level {
+                            // Rescale sum down to term's level
+                            while sum.level > term.level {
+                                sum = cuda_rescale_down(&sum, ckks_ctx)?;
+                            }
+                        } else {
+                            // This shouldn't happen in normal BSGS, but handle it
+                            return Err(format!("Unexpected level mismatch: baby_sum.level={} < term.level={}", sum.level, term.level));
+                        }
+                    }
+                    Some(cuda_add_ciphertexts(&sum, &term)?)
+                } else {
+                    Some(term)
+                };
             }
         }
 
+        // Skip if no terms were added
+        let baby_sum = match baby_sum {
+            Some(sum) => sum,
+            None => continue,
+        };
+
         // Multiply by giant step power and add to result
         let term = cuda_multiply_ciphertexts(&baby_sum, &x_giant_power, ckks_ctx, relin_keys)?;
+
+        // Match levels before adding to result
+        if result.level != term.level {
+            if result.level > term.level {
+                while result.level > term.level {
+                    result = cuda_rescale_down(&result, ckks_ctx)?;
+                }
+            } else {
+                return Err(format!("Unexpected level mismatch in result: result.level={} < term.level={}", result.level, term.level));
+            }
+        }
         result = cuda_add_ciphertexts(&result, &term)?;
 
         // Update giant step power
@@ -417,6 +461,32 @@ fn cuda_subtract_ciphertexts(
         num_primes,
         level: ct1.level,
         scale: ct1.scale,
+    })
+}
+
+/// Rescale ciphertext down by one level
+fn cuda_rescale_down(
+    ct: &CudaCiphertext,
+    ckks_ctx: &Arc<CudaCkksContext>,
+) -> Result<CudaCiphertext, String> {
+    if ct.level == 0 {
+        return Err("Cannot rescale at level 0".to_string());
+    }
+
+    let n = ct.n;
+    let num_primes = ct.num_primes;
+
+    // Rescale using GPU
+    let c0_rescaled = ckks_ctx.exact_rescale_gpu(&ct.c0, num_primes - 1)?;
+    let c1_rescaled = ckks_ctx.exact_rescale_gpu(&ct.c1, num_primes - 1)?;
+
+    Ok(CudaCiphertext {
+        c0: c0_rescaled,
+        c1: c1_rescaled,
+        n,
+        num_primes: num_primes - 1,
+        level: ct.level - 1,
+        scale: ct.scale / ckks_ctx.params().moduli[num_primes - 1] as f64,
     })
 }
 
