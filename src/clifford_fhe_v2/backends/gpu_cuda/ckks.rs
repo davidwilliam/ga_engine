@@ -242,7 +242,8 @@ impl CudaCkksContext {
         }
 
         // Get precomputed constants
-        let qlast_inv = &self.rescale_inv_table[level];
+        // Table is indexed from level-1 (since level 0 doesn't rescale)
+        let qlast_inv = &self.rescale_inv_table[level - 1];
         assert_eq!(qlast_inv.len(), num_primes_out, "qlast_inv table size mismatch");
 
         // Copy to GPU
