@@ -25,7 +25,7 @@ fn main() -> Result<(), String> {
 
     // Step 1: Initialize parameters
     println!("Step 1: Initializing parameters");
-    let params = CliffordFHEParams::new_test_ntt_1024();
+    let params = CliffordFHEParams::new_v3_bootstrap_metal()?;
     let n = params.n;
     let num_primes = params.moduli.len();
     let bootstrap_params = BootstrapParams::balanced();
@@ -88,7 +88,7 @@ fn main() -> Result<(), String> {
 
     // Step 5: Create test ciphertext
     println!("Step 5: Creating test ciphertext");
-    let level = 1;  // Low level (almost out of noise budget)
+    let level = 2;  // Low level (almost out of noise budget)
     let mut c0 = vec![0u64; n * (level + 1)];
     let mut c1 = vec![0u64; n * (level + 1)];
 
@@ -106,7 +106,7 @@ fn main() -> Result<(), String> {
         n,
         num_primes: level + 1,
         level,
-        scale: 1e10,
+        scale: params.scale,  // Use the scale from parameters (2^45)
     };
 
     println!("  Input ciphertext: level = {}, scale = {:.2e}\n", ct_in.level, ct_in.scale);
