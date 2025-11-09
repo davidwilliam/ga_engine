@@ -199,6 +199,7 @@ fn cuda_eval_polynomial_bsgs(
     for g in 0..giant_steps {
         // Evaluate baby steps for this giant step
         // Compute the minimum level we'll encounter in this iteration
+        println!("        [DEBUG] Giant step g={}", g);
         let min_level = (0..baby_steps)
             .filter_map(|b| {
                 let idx = g * baby_steps + b;
@@ -212,6 +213,7 @@ fn cuda_eval_polynomial_bsgs(
             })
             .min()
             .unwrap_or(ct.level);
+        println!("        [DEBUG] min_level for g={} is {}", g, min_level);
 
         let mut baby_sum: Option<CudaCiphertext> = None;
 
