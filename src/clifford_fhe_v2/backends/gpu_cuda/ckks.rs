@@ -292,6 +292,65 @@ impl CudaCkksContext {
         Ok(result)
     }
 
+    /// Rescale polynomial in flat RNS layout (for golden compare testing).
+    /// Input and output are in flat layout: poly[prime_idx * n + coeff_idx]
+    pub fn exact_rescale_gpu_flat(&self, poly_in: &[u64], level: usize) -> Result<Vec<u64>, String> {
+        if level == 0 {
+            return Err("Cannot rescale at level 0".to_string());
+        }
+
+        let n = self.params.n;
+        let moduli = &self.params.moduli[..=level];
+        let num_primes_in = moduli.len();
+        let num_primes_out = num_primes_in - 1;
+
+        assert_eq!(poly_in.len(), n * num_primes_in, "Input size mismatch");
+
+        // Input is already in flat RNS layout - no conversion needed
+
+        // Get precomputed constants
+        // Table is indexed from level-1 (since level 0 doesn't rescale)
+        let qlast_inv = &self.rescale_inv_table[level - 1];
+        assert_eq!(qlast_inv.len(), num_primes_out, "qlast_inv table size mismatch");
+
+        // Copy to GPU
+        let gpu_input = self.device.device.htod_copy(poly_in.to_vec())
+            .map_err(|e| format!("Failed to copy input to GPU: {:?}", e))?;
+
+        let mut gpu_output = self.device.device.alloc_zeros::<u64>(n * num_primes_out)
+            .map_err(|e| format!("Failed to allocate output: {:?}", e))?;
+
+        let gpu_moduli = self.device.device.htod_copy(moduli.to_vec())
+            .map_err(|e| format!("Failed to copy moduli: {:?}", e))?;
+
+        let gpu_qtop_inv = self.device.device.htod_copy(qlast_inv.clone())
+            .map_err(|e| format!("Failed to copy qtop_inv: {:?}", e))?;
+
+        // Get kernel function
+        let func = self.device.device.get_func("rns_module", "rns_exact_rescale")
+            .ok_or("Failed to get rns_exact_rescale function")?;
+
+        // Launch kernel
+        let config = self.device.get_launch_config(n);
+        unsafe {
+            func.launch(config, (
+                &gpu_input,
+                &mut gpu_output,
+                &gpu_moduli,
+                &gpu_qtop_inv,
+                n as u32,
+                num_primes_in as u32,
+                num_primes_out as u32,
+            )).map_err(|e| format!("Rescale kernel launch failed: {:?}", e))?;
+        }
+
+        // Copy result back (already in flat layout)
+        let result = self.device.device.dtoh_sync_copy(&gpu_output)
+            .map_err(|e| format!("Failed to copy from GPU: {:?}", e))?;
+
+        Ok(result)
+    }
+
     /// Encode floating-point values to polynomial (CPU operation)
     pub fn encode(&self, values: &[f64], scale: f64, level: usize) -> Result<CudaPlaintext, String> {
         // Use CPU encoding (same as Metal implementation)
