@@ -80,7 +80,7 @@ pub fn cuda_coeff_to_slot(
         let ct_mul2 = cuda_multiply_plain(&ct_rotated, &pt_diag2, ckks_ctx, scale_for_diag)?;
 
         // Step 5: Add the two results (butterfly operation)
-        current = cuda_add_ciphertexts(&ct_mul1, &ct_mul2)?;
+        current = cuda_add_ciphertexts(&ct_mul1, &ct_mul2, ckks_ctx)?;
 
         println!("      → After butterfly: level={}, scale={:.2e}",
             current.level, current.scale);
@@ -251,39 +251,51 @@ pub fn cuda_multiply_plain(
 }
 
 /// Add two ciphertexts (assumes levels and scales match)
+///
+/// This uses the same proven logic as V2 CUDA `CudaCkksContext::add()` method.
+/// Uses proper modular arithmetic with access to the RNS moduli.
 pub fn cuda_add_ciphertexts(
     ct1: &CudaCiphertext,
     ct2: &CudaCiphertext,
+    ckks_ctx: &Arc<CudaCkksContext>,
 ) -> Result<CudaCiphertext, String> {
+    // Verify levels match
     if ct1.level != ct2.level {
-        return Err(format!("Level mismatch: {} vs {}", ct1.level, ct2.level));
-    }
-
-    if ct1.n != ct2.n || ct1.num_primes != ct2.num_primes {
-        return Err("Ciphertext dimension mismatch".to_string());
+        return Err(format!("Ciphertexts must be at same level: {} vs {}", ct1.level, ct2.level));
     }
 
     let n = ct1.n;
+    let num_active_primes = ct1.level + 1;
     let num_primes = ct1.num_primes;
-    let mut c0_sum = vec![0u64; n * num_primes];
-    let mut c1_sum = vec![0u64; n * num_primes];
 
-    // Add coefficient-wise in RNS
-    for idx in 0..(n * num_primes) {
-        let prime_idx = idx % num_primes;
-        let q = ct1.c0[0]; // Get modulus (TODO: proper moduli access)
+    // Allocate result with same stride as input
+    let mut c0 = vec![0u64; n * num_primes];
+    let mut c1 = vec![0u64; n * num_primes];
 
-        c0_sum[idx] = (ct1.c0[idx] + ct2.c0[idx]) % q;
-        c1_sum[idx] = (ct1.c1[idx] + ct2.c1[idx]) % q;
+    // Add coefficient-wise using proper modular arithmetic
+    // This is the same logic as V2 CUDA CudaCkksContext::add()
+    for coeff_idx in 0..n {
+        for prime_idx in 0..num_active_primes {
+            let q = ckks_ctx.params().moduli[prime_idx];
+            let idx = coeff_idx * num_primes + prime_idx;
+
+            // c0 = ct1.c0 + ct2.c0 (mod q)
+            let sum0 = ct1.c0[idx] + ct2.c0[idx];
+            c0[idx] = if sum0 >= q { sum0 - q } else { sum0 };
+
+            // c1 = ct1.c1 + ct2.c1 (mod q)
+            let sum1 = ct1.c1[idx] + ct2.c1[idx];
+            c1[idx] = if sum1 >= q { sum1 - q } else { sum1 };
+        }
     }
 
     Ok(CudaCiphertext {
-        c0: c0_sum,
-        c1: c1_sum,
+        c0,
+        c1,
         n,
         num_primes,
         level: ct1.level,
-        scale: ct1.scale,  // Scales should match
+        scale: ct1.scale,
     })
 }
 

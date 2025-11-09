@@ -145,7 +145,7 @@ fn cuda_eval_polynomial_horner(
 
         // Add constant
         let ct_const = cuda_create_constant_ciphertext(coeffs[i], ct.n, result.level, ckks_ctx)?;
-        result = cuda_add_ciphertexts(&result, &ct_const)?;
+        result = cuda_add_ciphertexts(&result, &ct_const, ckks_ctx)?;
     }
 
     Ok(result)
@@ -253,7 +253,7 @@ fn cuda_eval_polynomial_bsgs(
                 let baby_sum_level_before = baby_sum.as_ref().map(|s| s.level);
                 baby_sum = if let Some(sum) = baby_sum {
                     println!("          adding: sum.level={}, term.level={}", sum.level, term.level);
-                    Some(cuda_add_ciphertexts(&sum, &term)?)
+                    Some(cuda_add_ciphertexts(&sum, &term, ckks_ctx)?)
                 } else {
                     Some(term)
                 };
@@ -290,7 +290,7 @@ fn cuda_eval_polynomial_bsgs(
         while term.level > target_level {
             term = cuda_rescale_down(&term, ckks_ctx)?;
         }
-        result = cuda_add_ciphertexts(&result, &term)?;
+        result = cuda_add_ciphertexts(&result, &term, ckks_ctx)?;
 
         // Update giant step power
         if g < giant_steps - 1 {

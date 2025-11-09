@@ -86,7 +86,7 @@ pub fn cuda_slot_to_coeff(
         let ct_mul2 = cuda_multiply_plain(&ct_rotated, &pt_diag2, ckks_ctx, scale_for_diag)?;
 
         // Step 5: Add the two results (inverse butterfly operation)
-        current = cuda_add_ciphertexts(&ct_mul1, &ct_mul2)?;
+        current = cuda_add_ciphertexts(&ct_mul1, &ct_mul2, ckks_ctx)?;
 
         println!("      → After inverse butterfly: level={}, scale={:.2e}",
             current.level, current.scale);
