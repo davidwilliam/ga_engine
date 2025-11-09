@@ -256,6 +256,97 @@ impl CudaRelinKeys {
         Ok((c0_acc, c1_acc))
     }
 
+    /// Apply relinearization using GPU NTT for polynomial multiplication
+    ///
+    /// This is MUCH faster than the CPU version (O(n log n) vs O(n²))
+    ///
+    /// Input: (c0, c1, c2) where c2 needs to be eliminated
+    /// Output: (c0', c1') where c2 has been absorbed using relin key
+    pub fn apply_relinearization_gpu(
+        &self,
+        c0: &[u64],
+        c1: &[u64],
+        c2: &[u64],
+        level: usize,
+        ntt_contexts: &[super::ntt::CudaNttContext],
+    ) -> Result<(Vec<u64>, Vec<u64>), String> {
+        let relin_key = self.relin_key.as_ref()
+            .ok_or_else(|| "Relinearization key not generated".to_string())?;
+
+        let n = self.params.n;
+        let num_primes = level + 1;
+
+        // Decompose c2 into base-w digits
+        let digits = self.gadget_decompose(c2, num_primes)?;
+
+        // Initialize accumulator
+        let mut c0_acc = c0.to_vec();
+        let mut c1_acc = c1.to_vec();
+
+        // Accumulate: c0' = c0 + Σ d_i · b_i, c1' = c1 + Σ d_i · a_i
+        for (digit_idx, d_i) in digits.iter().enumerate() {
+            if digit_idx >= relin_key.ks_components.len() {
+                break;
+            }
+
+            let (b_i, a_i) = &relin_key.ks_components[digit_idx];
+
+            // Multiply d_i · b_i using GPU NTT
+            let d_b = self.gpu_multiply_flat_ntt(d_i, b_i, num_primes, ntt_contexts)?;
+            // Multiply d_i · a_i using GPU NTT
+            let d_a = self.gpu_multiply_flat_ntt(d_i, a_i, num_primes, ntt_contexts)?;
+
+            // Accumulate
+            for i in 0..n * num_primes {
+                let q = self.params.moduli[i / n];
+                c0_acc[i] = (c0_acc[i] + d_b[i]) % q;
+                c1_acc[i] = (c1_acc[i] + d_a[i]) % q;
+            }
+        }
+
+        Ok((c0_acc, c1_acc))
+    }
+
+    /// GPU polynomial multiplication in flat RNS layout using NTT
+    ///
+    /// This replaces the O(n²) CPU schoolbook with O(n log n) GPU NTT
+    fn gpu_multiply_flat_ntt(
+        &self,
+        poly1: &[u64],
+        poly2: &[u64],
+        num_primes: usize,
+        ntt_contexts: &[super::ntt::CudaNttContext],
+    ) -> Result<Vec<u64>, String> {
+        let n = self.params.n;
+        let mut result = vec![0u64; n * num_primes];
+
+        // For each RNS prime, use GPU NTT multiplication
+        for prime_idx in 0..num_primes {
+            let ntt_ctx = &ntt_contexts[prime_idx];
+            let offset = prime_idx * n;
+
+            // Extract polynomials for this prime
+            let mut p1 = poly1[offset..offset + n].to_vec();
+            let mut p2 = poly2[offset..offset + n].to_vec();
+
+            // Transform to NTT domain (GPU)
+            ntt_ctx.forward(&mut p1)?;
+            ntt_ctx.forward(&mut p2)?;
+
+            // Pointwise multiply in NTT domain (GPU)
+            let mut prod = vec![0u64; n];
+            ntt_ctx.pointwise_multiply(&p1, &p2, &mut prod)?;
+
+            // Transform back to coefficient domain (GPU)
+            ntt_ctx.inverse(&mut prod)?;
+
+            // Store result
+            result[offset..offset + n].copy_from_slice(&prod);
+        }
+
+        Ok(result)
+    }
+
     /// Gadget decomposition: decompose polynomial into base-w digits
     ///
     /// Input: poly in flat RNS layout

@@ -403,12 +403,13 @@ fn cuda_multiply_ciphertexts(
 
     // Apply relinearization if keys are available
     let (c0_final, c1_final) = if let Some(relin_keys) = relin_keys {
-        // Apply relinearization: (c0, c1, c2) → (c0', c1')
-        let (c0_relin, c1_relin) = relin_keys.apply_relinearization(
+        // Apply relinearization using GPU NTT: (c0, c1, c2) → (c0', c1')
+        let (c0_relin, c1_relin) = relin_keys.apply_relinearization_gpu(
             &c0_flat,
             &c1_flat,
             &c2_flat,
             ct1.level,
+            &ckks_ctx.ntt_contexts(),
         )?;
 
         // Convert back to strided layout
