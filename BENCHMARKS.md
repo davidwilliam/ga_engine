@@ -337,7 +337,3 @@ For consistent results:
 | 2025-11-04 | Ciphertext Mult | 109.9 ms | 34.0 ms | 3.2× | Initial NTT-based implementation |
 | 2025-11-08 | Bootstrap (Metal) | ~70s (CPU) | ~60s | 1.17× | 100% GPU Metal bootstrap |
 | 2025-11-09 | Bootstrap (CUDA) | ~70s (CPU) | **11.95s** | **5.86×** | **100% GPU CUDA bootstrap** ⭐ |
-
----
-
-Last updated: 2025-11-09

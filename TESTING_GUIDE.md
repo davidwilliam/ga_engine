@@ -463,7 +463,3 @@ For test failures or questions:
 - Review test output carefully (use `--nocapture` for details)
 - Verify GPU drivers and CUDA/Metal are properly installed
 - File issue at: https://github.com/davidwilliamsilva/ga_engine/issues
-
----
-
-Last updated: 2025-11-09

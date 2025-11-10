@@ -361,7 +361,3 @@ cargo build --release --features v2,v2-gpu-metal,v3
 - [BENCHMARKS.md](BENCHMARKS.md) - Performance measurements
 - [INSTALLATION.md](INSTALLATION.md) - Setup guide and system requirements
 - [TESTING_GUIDE.md](TESTING_GUIDE.md) - Testing procedures
-
----
-
-Last updated: 2025-11-09

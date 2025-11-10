@@ -293,5 +293,3 @@ MIT License - See [LICENSE](LICENSE) file
 ---
 
 **GA Engine** - Privacy-preserving geometric computing at scale.
-
-*Last updated: 2025-11-09*

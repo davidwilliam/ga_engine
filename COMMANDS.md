@@ -540,7 +540,3 @@ nvidia-smi -l 1  # Monitor GPU utilization in real-time
 For issues or questions:
 - **GitHub Issues**: https://github.com/davidwilliamsilva/ga_engine/issues
 - **Email**: dsilva@datahubz.com
-
----
-
-Last updated: 2025-11-09
