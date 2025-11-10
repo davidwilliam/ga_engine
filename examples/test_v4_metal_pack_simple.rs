@@ -26,10 +26,13 @@ fn main() {
     println!("  3. Result: [s₀, e1₀, e2₀, ..., I₀, s₁, e1₁, ...]\n");
 
     println!("Unpacking Algorithm:");
-    println!("  1. For each component i:");
+    println!("  1. Create extraction mask:");
+    println!("       [1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, ...]");
+    println!("       (1.0 at every 8th position)");
+    println!("  2. For each component i:");
     println!("       - Rotate packed ciphertext right by i steps");
-    println!("       - Apply mask (TODO: not yet implemented)");
-    println!("  2. Result: 8 component ciphertexts\n");
+    println!("       - Multiply by mask to extract component");
+    println!("  3. Result: 8 clean component ciphertexts\n");
 
     println!("API Usage:");
     println!("  // Pack");
@@ -51,11 +54,16 @@ fn main() {
     println!("  Steps: ±1, ±2, ±3, ±4, ±5, ±6, ±7");
     println!("  Total: 14 rotation keys\n");
 
-    println!("Next Steps:");
-    println!("  1. ✓ Packing/unpacking implemented");
-    println!("  2. ⏭ Add masking for proper unpacking");
+    println!("Implementation Status:");
+    println!("  1. ✓ Packing/unpacking with rotation");
+    println!("  2. ✓ Extraction masking (plaintext multiplication)");
     println!("  3. ⏭ Implement geometric operations");
     println!("  4. ⏭ Add integration test with full encryption\n");
+
+    println!("Masking Details:");
+    println!("  Mask pattern: [1, 0⁷, 1, 0⁷, ...] repeating");
+    println!("  Purpose: Zero out unwanted components after rotation");
+    println!("  Cost: 1 plaintext multiplication per component\n");
 
     println!("For full end-to-end test:");
     println!("  See examples/test_metal_rotation_only.rs");

@@ -6,21 +6,49 @@ use super::packed_multivector::PackedMultivector;
 
 #[cfg(feature = "v2-gpu-cuda")]
 use crate::clifford_fhe_v2::backends::gpu_cuda::{
-    ckks::{CudaCiphertext as Ciphertext, CudaCkksContext},
+    ckks::{CudaCiphertext as Ciphertext, CudaCkksContext, CudaPlaintext as Plaintext},
     rotation_keys::CudaRotationKeys as RotationKeys,
 };
 
 #[cfg(all(feature = "v2-gpu-metal", not(feature = "v2-gpu-cuda")))]
 use crate::clifford_fhe_v2::backends::gpu_metal::{
-    ckks::{MetalCiphertext as Ciphertext, MetalCkksContext as CudaCkksContext},
+    ckks::{MetalCiphertext as Ciphertext, MetalCkksContext as CudaCkksContext, MetalPlaintext as Plaintext},
     rotation_keys::MetalRotationKeys as RotationKeys,
 };
 
 #[cfg(all(feature = "v2-cpu-optimized", not(feature = "v2-gpu-cuda"), not(feature = "v2-gpu-metal")))]
 use crate::clifford_fhe_v2::backends::cpu_optimized::{
-    ckks::{Ciphertext, CpuCkksContext as CudaCkksContext},
+    ckks::{Ciphertext, CpuCkksContext as CudaCkksContext, Plaintext},
     // Note: CPU backend may not have rotation keys implemented yet
 };
+
+/// Create a mask plaintext for extracting a single component from packed layout
+///
+/// The mask has 1.0 at positions 0, 8, 16, 24, ... (every 8th slot)
+/// and 0.0 everywhere else. This extracts one component from the interleaved layout.
+///
+/// After rotating the packed ciphertext to align the desired component to position 0,
+/// multiplying by this mask zeros out all other components.
+#[cfg(any(feature = "v2-gpu-cuda", feature = "v2-gpu-metal"))]
+fn create_extraction_mask(
+    batch_size: usize,
+    n: usize,
+    ckks_ctx: &CudaCkksContext,
+) -> Result<Plaintext, String> {
+    let num_slots = n / 2;
+
+    // Create mask: 1.0 at positions 0, 8, 16, ..., 0.0 elsewhere
+    let mut mask_values = vec![0.0; num_slots];
+    for i in 0..batch_size {
+        let slot_idx = i * 8; // Every 8th position
+        if slot_idx < num_slots {
+            mask_values[slot_idx] = 1.0;
+        }
+    }
+
+    // Encode the mask into a plaintext
+    ckks_ctx.encode(&mask_values)
+}
 
 /// Pack multiple component-separate ciphertexts into a single packed ciphertext
 ///
@@ -114,22 +142,24 @@ pub fn pack_multivector(
 /// Output: 8 ciphertexts [ct_s, ct_e1, ct_e2, ct_e3, ct_e12, ct_e23, ct_e31, ct_I]
 ///
 /// Algorithm:
-/// 1. For each component i:
+/// 1. Create extraction mask: [1, 0, 0, 0, 0, 0, 0, 0, 1, 0, ...] (1 at every 8th position)
+/// 2. For each component i:
 ///    - Rotate packed_ct right by i positions (to align component i to position 0)
-///    - Multiply by mask plaintext that zeros out positions not divisible by 8
+///    - Multiply by mask to extract only that component
 ///
-/// TODO: Implement masking (for now, just rotations without masking)
 #[cfg(any(feature = "v2-gpu-cuda", feature = "v2-gpu-metal"))]
 pub fn unpack_multivector(
     packed: &PackedMultivector,
     rot_keys: &RotationKeys,
     ckks_ctx: &CudaCkksContext,
 ) -> Result<[Ciphertext; 8], String> {
+    // Create extraction mask (reuse for all components)
+    let mask = create_extraction_mask(packed.batch_size, packed.n, ckks_ctx)?;
+
     let mut components = Vec::with_capacity(8);
 
     for i in 0..8 {
-        // Rotate right by i positions (equivalent to left by -i)
-        // This brings component i to the 0th position of each 8-slot group
+        // Step 1: Rotate right by i positions to align component i to position 0
         let rotated = if i == 0 {
             // No rotation needed for component 0
             packed.ct.clone()
@@ -137,9 +167,11 @@ pub fn unpack_multivector(
             packed.ct.rotate_by_steps(-(i as i32), rot_keys, ckks_ctx)?
         };
 
-        // TODO: Apply mask to zero out positions 1-7, 9-15, 17-23, etc.
-        // For now, store the rotated ciphertext (will decrypt to have all components)
-        components.push(rotated);
+        // Step 2: Apply mask to extract only positions 0, 8, 16, 24, ...
+        // This zeros out all other components
+        let masked = rotated.multiply_plain(&mask, ckks_ctx)?;
+
+        components.push(masked);
     }
 
     Ok([
@@ -168,8 +200,8 @@ pub fn unpack_multivector(
 /// This is more efficient than unpacking all 8 components when you only need one.
 ///
 /// Algorithm:
-/// 1. Rotate packed_ct right by component_idx positions
-/// 2. Multiply by mask plaintext (TODO: masking not yet implemented)
+/// 1. Rotate packed_ct right by component_idx positions to align to position 0
+/// 2. Multiply by extraction mask to zero out all other components
 ///
 #[cfg(any(feature = "v2-gpu-cuda", feature = "v2-gpu-metal"))]
 pub fn extract_component(
@@ -182,15 +214,18 @@ pub fn extract_component(
         return Err(format!("Component index {} out of range [0,8)", component_idx));
     }
 
-    // Rotate right by component_idx positions
+    // Step 1: Rotate right by component_idx positions
     let rotated = if component_idx == 0 {
         packed.ct.clone()
     } else {
         packed.ct.rotate_by_steps(-(component_idx as i32), rot_keys, ckks_ctx)?
     };
 
-    // TODO: Apply mask to zero out positions 1-7, 9-15, etc.
-    Ok(rotated)
+    // Step 2: Apply extraction mask
+    let mask = create_extraction_mask(packed.batch_size, packed.n, ckks_ctx)?;
+    let masked = rotated.multiply_plain(&mask, ckks_ctx)?;
+
+    Ok(masked)
 }
 
 /// CPU version (placeholder)
