@@ -761,28 +761,37 @@ impl CudaCkksContext {
         self.ntt_inverse_batched_gpu(&mut gpu_c1_part2, num_active_primes)?;
         self.ntt_inverse_batched_gpu(&mut gpu_c2_result, num_active_primes)?;
 
-        // Step 5: Add c1_part1 + c1_part2 on GPU
+        // Step 5: Add c1_part1 + c1_part2 on GPU using rns_add kernel
         let mut gpu_c1_result = self.device.device.alloc_zeros::<u64>(n * num_active_primes)
             .map_err(|e| format!("Failed to allocate gpu_c1_result: {:?}", e))?;
 
-        // TODO: Use GPU kernel for addition (for now, do on CPU)
-        let c1_part1_cpu = self.device.device.dtoh_sync_copy(&gpu_c1_part1)
-            .map_err(|e| format!("Failed to copy c1_part1: {:?}", e))?;
-        let c1_part2_cpu = self.device.device.dtoh_sync_copy(&gpu_c1_part2)
-            .map_err(|e| format!("Failed to copy c1_part2: {:?}", e))?;
+        let gpu_moduli = self.gpu_moduli.as_ref()
+            .ok_or("GPU moduli not initialized")?;
 
-        let mut c1_result_cpu = vec![0u64; n * num_active_primes];
-        for prime_idx in 0..num_active_primes {
-            let offset = prime_idx * n;
-            let q = self.params.moduli[prime_idx];
-            for i in 0..n {
-                let sum = (c1_part1_cpu[offset + i] as u128 + c1_part2_cpu[offset + i] as u128) % q as u128;
-                c1_result_cpu[offset + i] = sum as u64;
-            }
+        let func_add = self.device.device.get_func("rns_module", "rns_add")
+            .ok_or("Failed to get rns_add function")?;
+
+        let threads_per_block = 256;
+        let total_elements = n * num_active_primes;
+        let num_blocks = (total_elements + threads_per_block - 1) / threads_per_block;
+
+        let cfg = LaunchConfig {
+            grid_dim: (num_blocks as u32, 1, 1),
+            block_dim: (threads_per_block as u32, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        unsafe {
+            func_add.launch(cfg, (
+                &gpu_c1_part1,
+                &gpu_c1_part2,
+                &mut gpu_c1_result,
+                gpu_moduli,
+                n as u32,
+                num_active_primes as u32,
+            ))
+            .map_err(|e| format!("GPU addition failed: {:?}", e))?;
         }
-
-        gpu_c1_result = self.device.device.htod_copy(c1_result_cpu)
-            .map_err(|e| format!("Failed to upload c1_result: {:?}", e))?;
 
         // Return GPU-resident results - NO final download!
         Ok((gpu_c0_result, gpu_c1_result, gpu_c2_result))
