@@ -23,6 +23,9 @@ pub mod packing;
 pub mod params;
 
 #[cfg(feature = "v4")]
+pub mod mult_table;
+
+#[cfg(feature = "v4")]
 pub mod geometric_ops;
 
 #[cfg(feature = "v4")]
