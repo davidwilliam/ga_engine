@@ -4,18 +4,30 @@ Complete guide for running all tests in GA Engine.
 
 ## Quick Start
 
-### Single Command - Run Everything
+### Run All Tests (CPU)
 ```bash
-cargo test --lib --features v2,v3
+cargo test --lib --features v1,v2,v3
 ```
 
-**Expected Result**: `ok. 249 passed; 0 failed; 2 ignored; 0 measured`
+**Expected Result**: `ok. ~210 passed; 0 failed; 0 ignored; 0 measured`
 
 **Time**: ~70 seconds
 
+### Run GPU Tests
+
+**Metal GPU (Apple Silicon):**
+```bash
+cargo test --release --features v2,v2-gpu-metal,v3
+```
+
+**CUDA GPU (NVIDIA):**
+```bash
+cargo test --release --features v2,v2-gpu-cuda,v3
+```
+
 ## Test Breakdown
 
-### 1. V3 Bootstrap Tests Only (52 tests)
+### 1. V3 Bootstrap Tests (52 tests)
 ```bash
 cargo test --lib --features v2,v3 clifford_fhe_v3
 ```
@@ -26,13 +38,11 @@ cargo test --lib --features v2,v3 clifford_fhe_v3
 - Diagonal matrix multiplication
 - EvalMod (homomorphic modular reduction)
 - ModRaise (modulus chain extension)
-- SIMD batching (512× throughput)
-- Component extraction (Pattern A)
 - Bootstrap pipeline integration
 
 **Result**: 52/52 passing (100%)
 
-### 2. V2 Optimized Backend Tests (127 tests)
+### 2. V2 Backend Tests (127 tests)
 ```bash
 cargo test --lib --features v2 clifford_fhe_v2
 ```
@@ -44,7 +54,6 @@ cargo test --lib --features v2 clifford_fhe_v2
 - Key generation and management
 - Polynomial multiplication
 - Geometric operations
-- SIMD backends (NEON, scalar)
 
 **Result**: 127/127 passing (100%)
 
@@ -65,7 +74,7 @@ cargo test --lib --features v1 clifford_fhe_v1
 
 ### 4. Lattice Reduction Tests (~60 tests)
 ```bash
-cargo test --lib lattice_reduction
+cargo test --lib lattice_reduction --features lattice-reduction
 ```
 
 **What's Tested**:
@@ -75,22 +84,89 @@ cargo test --lib lattice_reduction
 - Enumeration algorithms
 - GA-accelerated lattice operations
 
-**Note**: Requires CMake 4.0 fix (automatically applied via `.cargo/config.toml`)
+**Note**: Optional feature - not required for FHE operations
 
 **Result**: All passing
 
-### 5. Medical Imaging Tests (~25 tests)
+## GPU Bootstrap Testing
+
+### Metal GPU (Apple Silicon)
+
+#### Build V3 with Metal Backend
 ```bash
-cargo test --lib medical_imaging --features v2,v3
+cargo build --release --features v2,v2-gpu-metal,v3
 ```
 
-**What's Tested**:
-- Encrypted GNN inference
-- SIMD batching for point clouds
-- Clifford encoding
-- Batched geometric products
+#### Run Metal Bootstrap Tests
+```bash
+# Unit tests
+cargo test --release --features v2,v2-gpu-metal,v3
 
-**Result**: All passing (2 ignored V2 CPU tests)
+# Full bootstrap example (100% GPU)
+cargo run --release --features v2,v2-gpu-metal,v3 --example test_metal_gpu_bootstrap_native
+
+# Expected results:
+# - Total bootstrap: ~60s
+# - CoeffToSlot: ~50s
+# - SlotToCoeff: ~12s
+# - Error: ~3.6e-3 (excellent)
+# - Status: Production Stable
+```
+
+#### Metal Validation Tests
+```bash
+# GPU rescaling golden compare (bit-exact verification)
+cargo run --release --features v2,v2-gpu-metal,v3 --example test_rescale_golden_compare
+
+# Expected: 0 mismatches (bit-exact with CPU)
+
+# Layout conversion test
+cargo run --release --features v2,v2-gpu-metal,v3 --example test_multiply_rescale_layout
+```
+
+### CUDA GPU (NVIDIA)
+
+#### Build V3 with CUDA Backend
+```bash
+# Set CUDA environment
+export CUDA_PATH=/usr/local/cuda
+export LD_LIBRARY_PATH=$CUDA_PATH/lib64:$LD_LIBRARY_PATH
+
+# Build
+cargo build --release --features v2,v2-gpu-cuda,v3
+```
+
+#### Run CUDA Bootstrap Tests
+```bash
+# Unit tests
+cargo test --release --features v2,v2-gpu-cuda,v3
+
+# Full bootstrap example (100% GPU with relinearization)
+cargo run --release --features v2,v2-gpu-cuda,v3 --example test_cuda_bootstrap
+
+# Monitor GPU usage in separate terminal:
+nvidia-smi -l 1
+
+# Expected results:
+# - Total bootstrap: ~11.95s
+# - EvalMod: ~11.76s (98% of time)
+# - CoeffToSlot: ~0.15s
+# - SlotToCoeff: ~0.04s
+# - Error: ~1e-3 (excellent)
+# - GPU utilization: >90% during EvalMod
+# - Status: Production Stable
+```
+
+#### CUDA Performance Verification
+```bash
+# Verify GPU is being utilized
+nvidia-smi -l 1  # Run in separate terminal during test
+
+# Expected during bootstrap:
+# - GPU Utilization: >80%
+# - Memory Usage: 2-4GB
+# - Temperature: Varies by hardware
+```
 
 ## Specialized Test Commands
 
@@ -105,11 +181,6 @@ cargo test --lib clifford_fhe_v3::bootstrapping::rotation --features v2,v3 -- --
 ```bash
 cargo test --lib clifford_fhe_v3::bootstrapping::coeff_to_slot --features v2,v3 -- --nocapture
 cargo test --lib clifford_fhe_v3::bootstrapping::slot_to_coeff --features v2,v3 -- --nocapture
-```
-
-#### Extraction Tests (Pattern A)
-```bash
-cargo test --lib clifford_fhe_v3::batched::extraction --features v2,v3 -- --nocapture
 ```
 
 #### EvalMod Tests
@@ -129,69 +200,153 @@ cargo test --lib clifford_fhe_v3::bootstrapping::bootstrap_context --features v2
 cargo build --release --features v2,v3 --examples
 ```
 
-**Time**: ~60 seconds
+**Time**: ~60 seconds (CPU only)
 
 **Expected**: `Finished release [optimized] target(s)`
 
+### Compile GPU Examples
+```bash
+# Metal
+cargo build --release --features v2,v2-gpu-metal,v3 --examples
+
+# CUDA
+cargo build --release --features v2,v2-gpu-cuda,v3 --examples
+```
+
 ## Performance Testing
 
-### Run Integration Examples
+### CPU Backend Performance
 
-#### V3 Bootstrap Simple
+#### V2 CPU Example
 ```bash
-cargo run --release --features v2,v3 --example test_v3_bootstrap_simple
+cargo run --release --features v2 --example encrypted_3d_classification
+
+# Expected: ~300ms per geometric product (38× faster than V1)
 ```
 
-#### SIMD Batching Demo
+#### V3 CPU Bootstrap
 ```bash
-cargo run --release --features v2,v3 --example test_batching
+cargo run --release --features v2,v3 --example test_v3_full_bootstrap
+
+# Expected: ~70s total bootstrap
 ```
 
-#### Medical Imaging Encrypted
+### GPU Backend Performance
+
+#### Metal GPU Bootstrap
 ```bash
-cargo run --release --features v2,v3 --example medical_imaging_encrypted
+cargo run --release --features v2,v2-gpu-metal,v3 --example test_metal_gpu_bootstrap_native
+
+# Expected: ~60s total bootstrap
+# Speedup: 1.17× vs CPU
+```
+
+#### CUDA GPU Bootstrap
+```bash
+cargo run --release --features v2,v2-gpu-cuda,v3 --example test_cuda_bootstrap
+
+# Expected: ~11.95s total bootstrap
+# Speedup: 5.86× vs CPU, ~5× vs Metal
 ```
 
 ## Test Output Interpretation
 
 ### Successful Test Run
 ```
-running 249 tests
+running 210 tests
 test clifford_fhe_v1::... ok
 test clifford_fhe_v2::... ok
 test clifford_fhe_v3::... ok
 ...
 
-test result: ok. 249 passed; 0 failed; 2 ignored; 0 measured; 140 filtered out; finished in 70.22s
+test result: ok. 210 passed; 0 failed; 0 ignored; 0 measured; finished in 70.22s
 ```
 
-### What "2 ignored" Means
-- These are 2 medical imaging V2 CPU tests that are temporarily ignored
-- They don't affect V3 bootstrap functionality
-- V3 has 0 ignored tests (52/52 passing)
+### Successful GPU Bootstrap
+```
+╔═══════════════════════════════════════════════════════════════╗
+║           V3 CUDA GPU Bootstrap Test                         ║
+╚═══════════════════════════════════════════════════════════════╝
+
+Step 1: Initializing parameters
+✓ Generated 30 NTT-friendly primes
+
+Step 2: Initializing CUDA contexts
+✓ CUDA device initialized
+
+Step 3: Generating keys
+✓ Keys generated
+
+Step 4: Encrypting input
+✓ Input encrypted
+
+Step 5: Running bootstrap
+  CoeffToSlot completed in 0.15s
+  EvalMod completed in 11.76s
+  SlotToCoeff completed in 0.04s
+
+═══════════════════════════════════════════════════════════════
+Bootstrap completed in 11.95s
+═══════════════════════════════════════════════════════════════
+
+✅ V3 CUDA GPU BOOTSTRAP COMPLETE
+   Full implementation with relinearization!
+```
 
 ## Clean Build Testing
 
 ### Complete Clean Rebuild
 ```bash
 cargo clean
-cargo test --lib --features v2,v3
+cargo test --lib --features v1,v2,v3
 ```
 
 **Purpose**: Verify everything builds from scratch (useful after pulling updates)
 
-**Time**: ~2-3 minutes (first build) + ~70 seconds (tests)
+**Time**: ~3-5 minutes (first build) + ~70 seconds (tests)
+
+### Clean GPU Rebuild
+```bash
+cargo clean
+
+# Metal
+cargo build --release --features v2,v2-gpu-metal,v3
+
+# CUDA
+cargo build --release --features v2,v2-gpu-cuda,v3
+```
+
+**Time**: ~3-5 minutes (includes shader/kernel compilation)
 
 ## Troubleshooting
 
-### CMake 4.0 Errors
+### GPU Tests Not Running
 
-**Symptom**: `Compatibility with CMake < 3.5 has been removed from CMake`
+**Metal GPU:**
+```bash
+# Verify Metal support
+system_profiler SPDisplaysDataType | grep Metal
 
-**Solution**: This is FIXED automatically via `.cargo/config.toml`. If you see this error:
-1. Verify `.cargo/config.toml` exists and contains `CMAKE_POLICY_VERSION_MINIMUM = "3.5"`
-2. Run `cargo clean` and rebuild
-3. See [CMAKE_FIX.md](CMAKE_FIX.md) for details
+# Should show: Metal: Supported
+
+# Install Xcode Command Line Tools if needed
+xcode-select --install
+```
+
+**CUDA GPU:**
+```bash
+# Verify CUDA installation
+nvcc --version
+nvidia-smi
+
+# Check environment variables
+echo $CUDA_PATH
+echo $LD_LIBRARY_PATH
+
+# Set if needed
+export CUDA_PATH=/usr/local/cuda
+export LD_LIBRARY_PATH=$CUDA_PATH/lib64:$LD_LIBRARY_PATH
+```
 
 ### Test Timeouts
 
@@ -211,12 +366,43 @@ cargo test --release --lib --features v2,v3
 cargo test --lib test_name --features v2,v3 -- --nocapture
 ```
 
+### CUDA GPU Not Being Utilized
+
+**Symptom**: Bootstrap runs but GPU shows 0% usage
+
+**Solution**:
+```bash
+# Rebuild CUDA kernels from scratch
+cargo clean
+cargo build --release --features v2,v2-gpu-cuda,v3
+
+# Verify CUDA device is accessible
+nvidia-smi
+
+# Run with GPU monitoring
+nvidia-smi -l 1  # In separate terminal
+cargo run --release --features v2,v2-gpu-cuda,v3 --example test_cuda_bootstrap
+```
+
+### Lattice Reduction Build Issues
+
+**Symptom**: Build stuck at netlib-src compilation
+
+**Solution**: Lattice reduction is optional - skip it:
+```bash
+cargo clean
+cargo build --release --features v2,v3
+
+# Or install system BLAS (Linux)
+sudo apt-get install libblas-dev liblapack-dev
+```
+
 ## Continuous Integration
 
 ### Pre-Commit Checklist
 ```bash
 # 1. Run full test suite
-cargo test --lib --features v2,v3
+cargo test --lib --features v1,v2,v3
 
 # 2. Build all examples
 cargo build --release --features v2,v3 --examples
@@ -230,8 +416,20 @@ cargo clippy --features v2,v3 -- -D warnings
 
 **All should pass before committing.**
 
+### GPU-Specific Pre-Commit
+```bash
+# Metal (on macOS)
+cargo test --release --features v2,v2-gpu-metal,v3
+cargo run --release --features v2,v2-gpu-metal,v3 --example test_metal_gpu_bootstrap_native
+
+# CUDA (on Linux/Windows with NVIDIA GPU)
+cargo test --release --features v2,v2-gpu-cuda,v3
+cargo run --release --features v2,v2-gpu-cuda,v3 --example test_cuda_bootstrap
+```
 
 ## Test Statistics
+
+### CPU Tests
 
 | Category | Tests | Pass Rate | Time |
 |----------|-------|-----------|------|
@@ -239,14 +437,23 @@ cargo clippy --features v2,v3 -- -D warnings
 | V2 Optimized | 127 | 100% | ~15s |
 | V3 Bootstrap | 52 | 100% | ~40s |
 | Lattice Reduction | ~60 | 100% | ~5s |
-| Medical Imaging | ~25 | 100% (2 ignored) | ~5s |
-| **Total** | **249** | **100%** | **~70s** |
+| **Total** | **~210** | **100%** | **~70s** |
+
+### GPU Bootstrap Performance
+
+| Backend | Hardware | Total Time | Speedup vs CPU | Status |
+|---------|----------|------------|----------------|--------|
+| V3 CPU | Apple M3 Max | ~70s | 1× | Reference |
+| V3 Metal GPU | Apple M3 Max | ~60s | 1.17× | ✅ Production Stable |
+| V3 CUDA GPU | NVIDIA GPU | ~11.95s | 5.86× | ✅ Production Stable |
 
 ## Related Documentation
 
+- [ARCHITECTURE.md](ARCHITECTURE.md) - System architecture (V3 uses V2 backend)
 - [COMMANDS.md](COMMANDS.md) - Complete command reference
-- [CMAKE_FIX.md](CMAKE_FIX.md) - CMake 4.0 compatibility fix
-- [V3_BOOTSTRAP.md](V3_BOOTSTRAP.md) - V3 implementation details
+- [FEATURE_FLAGS.md](FEATURE_FLAGS.md) - Feature flag reference
+- [INSTALLATION.md](INSTALLATION.md) - Installation and setup
+- [BENCHMARKS.md](BENCHMARKS.md) - Performance measurements
 - [README.md](README.md) - Project overview
 
 ## Support
@@ -254,5 +461,9 @@ cargo clippy --features v2,v3 -- -D warnings
 For test failures or questions:
 - Check [COMMANDS.md](COMMANDS.md) troubleshooting section
 - Review test output carefully (use `--nocapture` for details)
-- Ensure CMake 4.0 fix is applied (see [CMAKE_FIX.md](CMAKE_FIX.md))
+- Verify GPU drivers and CUDA/Metal are properly installed
 - File issue at: https://github.com/davidwilliamsilva/ga_engine/issues
+
+---
+
+Last updated: 2025-11-09

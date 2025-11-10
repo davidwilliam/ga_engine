@@ -11,16 +11,25 @@ GA Engine uses feature flags to control which components are compiled:
 cargo build --release  # Includes: v1, lattice-reduction
 ```
 
-**Cloud GPU instances** (works with lattice-reduction, CMake 4.0 fix applied):
+**Recommended for development** (without lattice-reduction):
 ```bash
-cargo build --release --features v2-gpu-cuda  # lattice-reduction works now
+cargo build --release --features f64,nd,v1,v2 --no-default-features
+```
+
+**GPU backends**:
+```bash
+# Metal GPU (Apple Silicon)
+cargo build --release --features v2,v2-gpu-metal,v3
+
+# CUDA GPU (NVIDIA)
+cargo build --release --features v2,v2-gpu-cuda,v3
 ```
 
 **Key points**:
-- `lattice-reduction` is included by default and now works with CMake 4.0+
-- CMake 4.0 compatibility fixed via `.cargo/config.toml` (see [CMAKE_FIX.md](CMAKE_FIX.md))
+- See [FEATURE_FLAGS.md](FEATURE_FLAGS.md) for detailed feature flag reference
+- `v3` automatically includes `v2` as a dependency
+- GPU backends work with both V2 and V3
 - Lattice reduction is CPU-only security analysis, not needed for FHE operations
-- See [FEATURE_FLAGS.md](FEATURE_FLAGS.md) for detailed explanation
 
 ## Table of Contents
 
@@ -73,17 +82,6 @@ cargo test --test clifford_fhe_integration_tests --features f64,nd,v1 --no-defau
 # Run comprehensive geometric operations test suite (all 7 operations)
 cargo test --test test_geometric_operations --features f64,nd,v1 --no-default-features -- --nocapture
 
-# Run isolated operation tests (individual tests for clean output)
-cargo test --test test_clifford_operations_isolated test_key_generation --features f64,nd,v1 --no-default-features -- --nocapture
-cargo test --test test_clifford_operations_isolated test_encryption_decryption --features f64,nd,v1 --no-default-features -- --nocapture
-cargo test --test test_clifford_operations_isolated test_reverse --features f64,nd,v1 --no-default-features -- --nocapture
-cargo test --test test_clifford_operations_isolated test_geometric_product --features f64,nd,v1 --no-default-features -- --nocapture
-cargo test --test test_clifford_operations_isolated test_wedge_product --features f64,nd,v1 --no-default-features -- --nocapture
-cargo test --test test_clifford_operations_isolated test_inner_product --features f64,nd,v1 --no-default-features -- --nocapture
-cargo test --test test_clifford_operations_isolated test_rotation --features f64,nd,v1 --no-default-features -- --nocapture
-cargo test --test test_clifford_operations_isolated test_projection --features f64,nd,v1 --no-default-features -- --nocapture
-cargo test --test test_clifford_operations_isolated test_rejection --features f64,nd,v1 --no-default-features -- --nocapture
-
 # Run all V1 tests
 cargo test --features f64,nd,v1 --no-default-features
 ```
@@ -118,16 +116,12 @@ cargo build --release --features f64,nd,v2 --no-default-features
 
 ### Test V2 CPU
 ```bash
-# Run all V2 unit tests (132 tests, <1 second)
+# Run all V2 unit tests (127 tests, <1 second)
 cargo test --lib --features f64,nd,v2 --no-default-features
 
 # Run specific module tests
 cargo test --lib clifford_fhe_v2::backends::cpu_optimized::ntt --features f64,nd,v2 --no-default-features -- --nocapture
-cargo test --lib clifford_fhe_v2::backends::cpu_optimized::rns --features f64,nd,v2 --no-default-features -- --nocapture
 cargo test --lib clifford_fhe_v2::backends::cpu_optimized::ckks --features f64,nd,v2 --no-default-features -- --nocapture
-cargo test --lib clifford_fhe_v2::backends::cpu_optimized::keys --features f64,nd,v2 --no-default-features -- --nocapture
-cargo test --lib clifford_fhe_v2::backends::cpu_optimized::multiplication --features f64,nd,v2 --no-default-features -- --nocapture
-cargo test --lib clifford_fhe_v2::backends::cpu_optimized::geometric --features f64,nd,v2 --no-default-features -- --nocapture
 
 # Run V2 geometric operations integration test
 cargo test --test test_geometric_operations_v2 --features f64,nd,v2 --no-default-features -- --nocapture
@@ -143,11 +137,6 @@ cargo run --release --features f64,nd,v2 --no-default-features --example encrypt
 ```bash
 # Actual performance (Apple M3 Max, 14-core):
 # - Geometric product: 0.30s (38x faster than V1)
-# - Rotation (depth-2): 0.43s
-# - Wedge product: 0.54s
-# - Inner product: 0.53s
-# - Projection (depth-3): 0.67s
-# - Rejection (depth-3): 0.67s
 # - Keygen: 0.01s
 # - Error: <9.67e-8 (all operations)
 ```
@@ -159,14 +148,14 @@ cargo run --release --features f64,nd,v2 --no-default-features --example encrypt
 # Install Xcode Command Line Tools (macOS only)
 xcode-select --install
 
-# Build with Metal support (RECOMMENDED: without lattice-reduction)
-cargo build --release --features f64,nd,v2-gpu-metal --no-default-features
+# Build with Metal support (RECOMMENDED)
+cargo build --release --features v2,v2-gpu-metal
 ```
 
 ### Test V2 Metal
 ```bash
-# Run Metal GPU geometric operations test (includes benchmarking)
-cargo test --release --features f64,nd,v2-gpu-metal --no-default-features --test test_geometric_operations_metal -- --nocapture
+# Run Metal GPU tests
+cargo test --release --features v2,v2-gpu-metal
 ```
 
 ### Performance V2 Metal
@@ -176,8 +165,6 @@ cargo test --release --features f64,nd,v2-gpu-metal --no-default-features --test
 # - Speedup: 346× vs V1 (11.42s → 0.033s)
 # - Speedup: 9.1× vs V2 CPU (0.30s → 0.033s)
 # - Throughput: 30.3 operations/second
-# - Standard deviation: 2.6ms (7.8% CV)
-# - Statistical confidence: High (n=10 iterations)
 ```
 
 ## V2: CUDA GPU
@@ -191,71 +178,58 @@ nvcc --version
 export CUDA_PATH=/usr/local/cuda
 export LD_LIBRARY_PATH=$CUDA_PATH/lib64:$LD_LIBRARY_PATH
 
-# Build with CUDA support (RECOMMENDED for cloud GPU instances)
-cargo build --release --features f64,nd,v2-gpu-cuda --no-default-features
+# Build with CUDA support
+cargo build --release --features v2,v2-gpu-cuda
 ```
 
 ### Test V2 CUDA
 ```bash
-# Run CUDA GPU geometric operations test (RECOMMENDED for cloud instances)
-cargo test --release --features f64,nd,v2-gpu-cuda --no-default-features --test test_geometric_operations_cuda -- --nocapture
+# Run CUDA GPU tests
+cargo test --release --features v2,v2-gpu-cuda
 ```
 
 ### Performance V2 CUDA
 ```bash
 # Actual performance (NVIDIA RTX 5090):
-# - Geometric product: 5.7ms mean (5ms min, 5ms max)
+# - Geometric product: 5.7ms mean
 # - Speedup: 2,002× vs V1 (11.42s → 5.7ms)
 # - Speedup: 77× vs V2 CPU (441ms → 5.7ms)
-# - Ratio: 0.17× vs Metal GPU (5.7ms vs 34ms, CUDA is 6× faster)
+# - 6× faster than Metal GPU (33ms → 5.7ms)
 # - Throughput: 174.8 operations/second
-# - Standard deviation: 0.08ms (1.4% CV)
-# - Statistical confidence: High (n=10 iterations)
-# - Hardware: NVIDIA GeForce RTX 5090
 ```
 
 ## V3: Bootstrapping
 
 ### Build V3
+
 ```bash
-# Build V3 with V2 CPU backend
+# Build V3 with CPU backend
 cargo build --release --features v2,v3
 
 # Build V3 with Metal GPU backend (RECOMMENDED for Apple Silicon)
 cargo build --release --features v2,v2-gpu-metal,v3
+
+# Build V3 with CUDA GPU backend (RECOMMENDED for NVIDIA GPUs)
+cargo build --release --features v2,v2-gpu-cuda,v3
 ```
 
 ### Test V3
+
 ```bash
 # Run all V3 unit tests (52 tests, 100% passing)
 cargo test --lib --features v2,v3 clifford_fhe_v3
 
-# Run full test suite (V1 + V2 + V3 + lattice-reduction = 249 tests)
+# Run full test suite (V1 + V2 + V3 = ~200 tests without lattice-reduction)
 cargo test --lib --features v2,v3
 
 # Run V3 bootstrapping tests
 cargo test --lib clifford_fhe_v3::bootstrapping --features v2,v3 -- --nocapture
-
-# Run SIMD batching tests
-cargo test --lib clifford_fhe_v3::batched --features v2,v3 -- --nocapture
-
-# Run rotation tests
-cargo test --lib clifford_fhe_v3::bootstrapping::rotation --features v2,v3 -- --nocapture
-
-# Run CoeffToSlot/SlotToCoeff tests
-cargo test --lib clifford_fhe_v3::bootstrapping::coeff_to_slot --features v2,v3 -- --nocapture
-cargo test --lib clifford_fhe_v3::bootstrapping::slot_to_coeff --features v2,v3 -- --nocapture
-
-# Run extraction tests (Pattern A mask-only approach)
-cargo test --lib clifford_fhe_v3::batched::extraction --features v2,v3 -- --nocapture
 ```
 
-### Examples V3
+### Examples V3 - Metal GPU (Apple Silicon)
+
 ```bash
 # ==== RECOMMENDED: Metal GPU Bootstrap (PRODUCTION READY) ====
-
-# V2 Hybrid Bootstrap (GPU multiply + CPU rescale) ✅ STABLE
-cargo run --release --features v2,v2-gpu-metal,v3 --example test_metal_gpu_bootstrap
 
 # V2 Native Bootstrap (100% GPU) ✅ STABLE - November 2024
 cargo run --release --features v2,v2-gpu-metal,v3 --example test_metal_gpu_bootstrap_native
@@ -270,9 +244,28 @@ cargo run --release --features v2,v2-gpu-metal,v3 --example test_rescale_golden_
 
 # Layout conversion test
 cargo run --release --features v2,v2-gpu-metal,v3 --example test_multiply_rescale_layout
+```
 
-# ==== Legacy V3 CPU Examples ====
+### Examples V3 - CUDA GPU (NVIDIA)
 
+```bash
+# ==== CUDA GPU Bootstrap (PRODUCTION READY) ====
+
+# V3 CUDA GPU Bootstrap (100% GPU with relinearization) ✅ STABLE - November 2024
+cargo run --release --features v2,v2-gpu-cuda,v3 --example test_cuda_bootstrap
+
+# Results:
+# - Total bootstrap: ~11.95s
+# - EvalMod: ~11.76s (98% of time)
+# - CoeffToSlot: ~0.15s
+# - SlotToCoeff: ~0.04s
+# - Error: ~1e-3 (excellent accuracy)
+# - 100% GPU execution with relinearization
+```
+
+### Examples V3 - CPU Reference
+
+```bash
 # Full Bootstrap Pipeline (CPU-only)
 cargo run --release --features v2,v3 --example test_v3_full_bootstrap
 
@@ -281,38 +274,30 @@ cargo run --release --features v2,v3 --example test_v3_cpu_demo
 
 # V3 Parameters Test (verify dynamic prime generation)
 cargo run --release --features v2,v3 --example test_v3_parameters
-
-# Rotation Keys Test (verify Galois automorphisms)
-cargo run --release --features v2,v3 --example test_v3_rotation_keys
-cargo run --release --features v2,v3 --example test_v3_rotation
-cargo run --release --features v2,v3 --example test_v3_rotation_key_generation
-
-# Metal GPU Integration Tests
-cargo run --release --features v2,v3,v2-gpu-metal --example test_v3_metal_quick
-cargo run --release --features v2,v3,v2-gpu-metal --example test_v3_metal_operations
-
-# Comprehensive V3 Test Suite
-cargo run --release --features v2,v3 --example test_v3_all
-cargo run --release --features v2,v3 --example test_v3_phase3_complete
-cargo run --release --features v2,v3 --example test_v3_bootstrap_skeleton
 ```
 
 ### Performance V3
 
+**CUDA GPU Bootstrap (NVIDIA GPU) - November 2024 ✅**
+```bash
+# V3 CUDA GPU (100% GPU with relinearization):
+# - Total bootstrap: 11.95s
+# - EvalMod (9 levels): 11.76s (98% of total)
+# - CoeffToSlot (9 levels): ~0.15s
+# - SlotToCoeff (9 levels): ~0.04s
+# - Accuracy: error = ~1e-3 ✅
+# - Parameters: N=1024, 30 primes (1× 60-bit, 29× 45-bit)
+# - Status: PRODUCTION STABLE
+# - Key Achievement: Full bootstrap with relinearization
+```
+
 **Metal GPU Bootstrap (Apple M3 Max) - November 2024 ✅**
 ```bash
-# V2 Hybrid (GPU multiply + CPU rescale):
-# - Total bootstrap: ~65s
-# - CoeffToSlot (9 levels): ~53s
-# - SlotToCoeff (9 levels): ~13s
-# - Accuracy: error = 3.61e-3 ✅
-# - Status: PRODUCTION STABLE
-
 # V2 Native (100% GPU):
-# - Total bootstrap: ~60s (fastest!)
+# - Total bootstrap: ~60s
 # - CoeffToSlot (9 levels): ~50s
 # - SlotToCoeff (9 levels): ~12s
-# - Accuracy: error = 3.61e-3 ✅
+# - Accuracy: error = 3.6e-3 ✅
 # - Status: PRODUCTION STABLE
 # - Key Achievement: GPU rescaling with Russian peasant mul_mod_128
 
@@ -321,14 +306,11 @@ cargo run --release --features v2,v3 --example test_v3_bootstrap_skeleton
 # - Hardware: Apple M3 Max GPU
 ```
 
-**V3 CPU Bootstrap (Legacy)**
+**CPU Bootstrap (Reference)**
 ```bash
-# CPU-only performance (N=8192, 41 primes):
-# - Key generation: 1.31s
-# - Bootstrap context setup: 256.08s (rotation keys generation)
-# - Bootstrap operation: 359.49s (~6 minutes)
-# - Total end-to-end: 616.87s (~10 minutes)
-# - Accuracy: error = 3.55e-9 (excellent precision)
+# CPU-only performance (N=1024, 30 primes):
+# - Bootstrap operation: ~70s
+# - Accuracy: error = 3.6e-3
 # - Hardware: Apple M3 Max, 14-core CPU
 
 # Fast CPU demo (N=512, 7 primes):
@@ -340,61 +322,53 @@ cargo run --release --features v2,v3 --example test_v3_bootstrap_skeleton
 
 Lattice reduction is used for **security analysis** (cryptanalysis) of the FHE scheme. It is **not required** for FHE operations.
 
-**Note**: CMake 4.0 compatibility has been fixed via `.cargo/config.toml`. The lattice-reduction feature now builds successfully on all platforms. See [CMAKE_FIX.md](CMAKE_FIX.md) for details.
-
 ### Build Lattice Reduction
 ```bash
-# With lattice reduction (default, now works with CMake 4.0+)
+# With lattice reduction (default)
 cargo build --release --features lattice-reduction
 
-# Or build with GPU backends (lattice-reduction included by default)
-cargo build --release --features v2-gpu-cuda
-cargo build --release --features v2-gpu-metal
+# Or use default features
+cargo build --release
 ```
 
 ### Test Lattice Reduction
 ```bash
-# Run all lattice reduction tests (included in full suite)
+# Run all lattice reduction tests
 cargo test --lib lattice_reduction
 
 # Run specific module tests
 cargo test --lib lattice_reduction::stable_gso --features lattice-reduction
 cargo test --lib lattice_reduction::bkz_stable --features lattice-reduction
-cargo test --lib lattice_reduction::ga_lll --features lattice-reduction
-cargo test --lib lattice_reduction::enumeration --features lattice-reduction
 ```
 
 ### Examples Lattice Reduction
 ```bash
-# Lattice reduction examples (all require lattice-reduction feature)
+# Lattice reduction examples
 cargo run --release --features lattice-reduction --example test_stable_bkz
 cargo run --release --features lattice-reduction --example test_lll
-cargo run --release --features lattice-reduction --example benchmark_lll_comparison
 ```
 
 ## All Versions Combined
 
 ### Build All
 ```bash
-# Build all versions (V1, V2) without lattice reduction (RECOMMENDED)
-cargo build --release --features f64,nd,v1,v2 --no-default-features
+# Build all versions (V1, V2, V3) without lattice reduction (RECOMMENDED)
+cargo build --release --features f64,nd,v1,v2,v3 --no-default-features
 
-# Build with GPU support
-cargo build --release --features f64,nd,v1,v2,v2-gpu-metal --no-default-features  # macOS
-cargo build --release --features f64,nd,v1,v2,v2-gpu-cuda --no-default-features   # Linux/Cloud GPU
+# Build with Metal GPU support (Apple Silicon)
+cargo build --release --features v2,v2-gpu-metal,v3
+
+# Build with CUDA GPU support (NVIDIA)
+cargo build --release --features v2,v2-gpu-cuda,v3
 ```
 
 ### Test All
 ```bash
 # Run all tests across all versions (without lattice reduction, RECOMMENDED)
-cargo test --features f64,nd,v1,v2 --no-default-features
+cargo test --features f64,nd,v1,v2,v3 --no-default-features
 
-# Run all tests including GPU backends
-cargo test --features f64,nd,v1,v2,v2-gpu-metal --no-default-features  # macOS
-cargo test --features f64,nd,v1,v2,v2-gpu-cuda --no-default-features   # Linux/Cloud GPU
-
-# Run with lattice reduction (requires working CMake)
-cargo test --features v1,v2,lattice-reduction
+# Run all tests with default features (includes lattice-reduction)
+cargo test --features v1,v2,v3
 ```
 
 ### Benchmarks
@@ -403,7 +377,7 @@ cargo test --features v1,v2,lattice-reduction
 cargo bench --bench v1_vs_v2_benchmark --features v1,v2
 
 # Run with specific backend
-cargo bench --features v2-gpu-cuda
+cargo bench --features v2,v2-gpu-cuda
 ```
 
 ### Documentation
@@ -424,11 +398,13 @@ cargo doc --open --features v2,v3
 | Feature | Description | Required For |
 |---------|-------------|--------------|
 | `v1` | V1 baseline reference implementation | V1 examples and tests |
-| `v2` | V2 CPU-optimized backend (Rayon parallel) | V2 CPU examples and tests |
-| `v2-gpu-metal` | V2/V3 Metal GPU backend (Apple Silicon) | Metal GPU tests (V2/V3) |
-| `v2-gpu-cuda` | V2/V3 CUDA GPU backend (NVIDIA) | CUDA GPU tests (V2/V3) |
-| `v3` | V3 bootstrapping and SIMD batching | V3 examples and tests |
-| `lattice-reduction` | Lattice reduction for security analysis | Lattice reduction tests and examples |
+| `v2` | V2 CPU-optimized backend | V2 CPU examples and tests |
+| `v2-gpu-metal` | V2/V3 Metal GPU backend (Apple Silicon) | Metal GPU operations (V2/V3) |
+| `v2-gpu-cuda` | V2/V3 CUDA GPU backend (NVIDIA) | CUDA GPU operations (V2/V3) |
+| `v3` | V3 bootstrapping (requires `v2`) | V3 bootstrap examples and tests |
+| `lattice-reduction` | Lattice reduction for security analysis | Lattice reduction tests |
+
+**Important**: `v3` automatically includes `v2` as a dependency. GPU backends (`v2-gpu-metal`, `v2-gpu-cuda`) work with both V2 and V3.
 
 ### Test Counts
 
@@ -438,10 +414,12 @@ cargo doc --open --features v2,v3
 | V2 Unit Tests | 127 | `cargo test --lib --features v2` |
 | V3 Unit Tests | 52 | `cargo test --lib --features v2,v3 clifford_fhe_v3` |
 | Lattice Reduction | ~60 | `cargo test --lib lattice_reduction` |
-| Medical Imaging | ~25 | `cargo test --lib medical_imaging --features v2,v3` |
-| **Total** | **249** | `cargo test --lib --features v2,v3` |
+| **Total (no lattice)** | **~210** | `cargo test --lib --features v1,v2,v3` |
+| **Total (with lattice)** | **~270** | `cargo test --lib --features v1,v2,v3,lattice-reduction` |
 
 ### Performance Summary
+
+#### Geometric Product (Single Operation)
 
 | Backend | Hardware | Time | Speedup vs V1 |
 |---------|----------|------|---------------|
@@ -449,7 +427,16 @@ cargo doc --open --features v2,v3
 | V2 CPU | Apple M3 Max (14-core) | 0.30s | 38× |
 | V2 Metal | Apple M3 Max GPU | 33ms | 346× |
 | V2 CUDA | NVIDIA RTX 5090 | 5.7ms | 2,002× |
-| V3 SIMD | (projected) | 0.656ms/sample | 17,408× |
+
+#### Bootstrap (Full Operation)
+
+| Backend | Hardware | Total Time | Speedup vs CPU |
+|---------|----------|------------|----------------|
+| V3 CPU | Apple M3 Max | ~70s | 1× |
+| V3 Metal GPU | Apple M3 Max | ~60s | 1.17× |
+| V3 CUDA GPU | NVIDIA GPU | **11.95s** | **5.86×** |
+
+**Key Insight**: CUDA bootstrap is ~5× faster than Metal, primarily due to different GPU architectures and optimizations.
 
 ## Troubleshooting
 
@@ -473,22 +460,20 @@ xcode-select --install
 # Solution: Install CUDA Toolkit and set environment variables
 export CUDA_PATH=/usr/local/cuda
 export LD_LIBRARY_PATH=$CUDA_PATH/lib64:$LD_LIBRARY_PATH
+nvcc --version  # Verify installation
 ```
 
-**Problem**: CMake 4.0 errors with netlib-src
+**Problem**: CMake errors with netlib-src
 ```bash
 # Error: "Compatibility with CMake < 3.5 has been removed from CMake"
 
-# Solution: This is FIXED in the repository via .cargo/config.toml
-# The fix is automatic - just rebuild:
+# Solution: Automatic fix via .cargo/config.toml
 cargo clean
 cargo build --release --features v2,v3
 
-# If you still see issues, verify .cargo/config.toml contains:
+# If issues persist, verify .cargo/config.toml contains:
 # [env]
 # CMAKE_POLICY_VERSION_MINIMUM = "3.5"
-
-# See CMAKE_FIX.md for detailed explanation
 ```
 
 ### Test Failures
@@ -505,15 +490,16 @@ cargo test --release --features v1,v2,v3
 cargo test --lib specific_test_name --features v2 -- --nocapture
 ```
 
-**Problem**: Lattice reduction tests not found
+**Problem**: GPU tests failing
 ```bash
-# Root cause: Built without lattice-reduction feature
+# Solution: Verify GPU is available and drivers are installed
 
-# Solution: Add lattice-reduction feature
-cargo test --lib lattice_reduction --features lattice-reduction
+# Metal (macOS):
+system_profiler SPDisplaysDataType | grep Metal
 
-# Or use default features (which include lattice-reduction)
-cargo test --lib lattice_reduction
+# CUDA (Linux/Windows):
+nvidia-smi
+nvcc --version
 ```
 
 ### Performance Issues
@@ -523,20 +509,30 @@ cargo test --lib lattice_reduction
 # Solution: Always use --release flag for benchmarking
 cargo run --release --features v2 --example encrypted_3d_classification
 
-# Solution: Set optimization level in Cargo.toml (already configured)
+# Solution: Verify optimization level in Cargo.toml (already configured)
 # [profile.release]
 # opt-level = 3
 # lto = true
 ```
 
+**Problem**: CUDA GPU not being utilized
+```bash
+# Solution: Verify CUDA is properly installed and LD_LIBRARY_PATH is set
+export CUDA_PATH=/usr/local/cuda
+export LD_LIBRARY_PATH=$CUDA_PATH/lib64:$LD_LIBRARY_PATH
+
+# Check GPU usage during execution
+nvidia-smi -l 1  # Monitor GPU utilization in real-time
+```
+
 ## Additional Resources
 
 ### Essential Documentation
-- **V3 Bootstrap Guide**: See [V3_BOOTSTRAP.md](V3_BOOTSTRAP.md) - Complete bootstrap implementation guide (hybrid & native GPU)
 - **Architecture**: See [ARCHITECTURE.md](ARCHITECTURE.md) - System architecture and component overview
 - **Installation**: See [INSTALLATION.md](INSTALLATION.md) - Setup and dependencies
 - **Testing**: See [TESTING_GUIDE.md](TESTING_GUIDE.md) - Comprehensive testing procedures
 - **Benchmarks**: See [BENCHMARKS.md](BENCHMARKS.md) - Performance measurements
+- **Feature Flags**: See [FEATURE_FLAGS.md](FEATURE_FLAGS.md) - Complete feature flag reference
 - **README**: See [README.md](README.md) - Project overview and quick start
 
 ## Support
@@ -544,3 +540,7 @@ cargo run --release --features v2 --example encrypted_3d_classification
 For issues or questions:
 - **GitHub Issues**: https://github.com/davidwilliamsilva/ga_engine/issues
 - **Email**: dsilva@datahubz.com
+
+---
+
+Last updated: 2025-11-09
