@@ -9,13 +9,13 @@ use std::sync::Arc;
 
 /// Precomputed twiddle factors and NTT context for CUDA
 pub struct CudaNttContext {
-    device: Arc<CudaDeviceContext>,
+    pub(crate) device: Arc<CudaDeviceContext>,
     pub(crate) n: usize,
     pub(crate) q: u64,
     pub(crate) root: u64,
-    twiddles: Vec<u64>,
-    twiddles_inv: Vec<u64>,
-    n_inv: u64,
+    pub(crate) twiddles: Vec<u64>,
+    pub(crate) twiddles_inv: Vec<u64>,
+    pub(crate) n_inv: u64,
     log_n: usize,
     // Cached to avoid recompilation
     _kernels_loaded: bool,
@@ -42,6 +42,9 @@ impl CudaNttContext {
             "ntt_inverse",
             "ntt_scalar_multiply",
             "ntt_pointwise_multiply",
+            "ntt_forward_batched",
+            "ntt_inverse_batched",
+            "ntt_pointwise_multiply_batched",
         ]).map_err(|e| format!("Failed to load PTX: {:?}", e))?;
 
         Ok(CudaNttContext {

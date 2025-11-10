@@ -210,4 +210,138 @@ __global__ void ntt_scalar_multiply(
     }
 }
 
+/**
+ * BATCHED OPERATIONS - Process multiple primes in parallel
+ *
+ * These kernels use 2D grid: (butterfly_blocks, num_primes)
+ * to process all RNS primes simultaneously, dramatically reducing
+ * kernel launch overhead.
+ */
+
+/**
+ * Batched Forward NTT - Process all primes in parallel
+ *
+ * Input layout: data[prime_idx * n + coeff_idx] (flat RNS)
+ * Grid: (butterfly_blocks, num_primes, 1)
+ *
+ * This replaces num_primes sequential kernel launches with ONE launch.
+ */
+__global__ void ntt_forward_batched(
+    unsigned long long* data,              // All primes' data [num_primes * n]
+    const unsigned long long* twiddles,    // Twiddles for ALL primes [num_primes * n]
+    const unsigned long long* moduli,      // RNS moduli [num_primes]
+    unsigned int n,                        // Ring dimension
+    unsigned int num_primes,               // Number of RNS primes
+    unsigned int stage,                    // Current NTT stage
+    unsigned int m                         // Butterfly group size
+) {
+    // 2D grid: x = butterfly index, y = prime index
+    unsigned int butterfly_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int prime_idx = blockIdx.y;
+
+    unsigned int total_butterflies = n / 2;
+
+    if (butterfly_idx >= total_butterflies || prime_idx >= num_primes) return;
+
+    // Get modulus for this prime
+    unsigned long long q = moduli[prime_idx];
+
+    // Offset to this prime's data
+    unsigned int prime_offset = prime_idx * n;
+    unsigned long long* coeffs = data + prime_offset;
+    const unsigned long long* twid = twiddles + prime_offset;
+
+    // Butterfly indices (same logic as single-prime version)
+    unsigned int k = butterfly_idx / m;
+    unsigned int j = butterfly_idx % m;
+    unsigned int butterfly_span = m * 2;
+
+    unsigned int idx1 = k * butterfly_span + j;
+    unsigned int idx2 = idx1 + m;
+
+    // Harvey butterfly: (a, b) -> (a + w*b, a - w*b)
+    unsigned long long a = coeffs[idx1];
+    unsigned long long b = coeffs[idx2];
+    unsigned long long w = twid[m + j];
+
+    unsigned long long wb = mul_mod(w, b, q);
+
+    coeffs[idx1] = add_mod(a, wb, q);
+    coeffs[idx2] = sub_mod(a, wb, q);
+}
+
+/**
+ * Batched Inverse NTT - Process all primes in parallel
+ *
+ * Input layout: data[prime_idx * n + coeff_idx] (flat RNS)
+ * Grid: (butterfly_blocks, num_primes, 1)
+ */
+__global__ void ntt_inverse_batched(
+    unsigned long long* data,
+    const unsigned long long* twiddles_inv,
+    const unsigned long long* moduli,
+    unsigned int n,
+    unsigned int num_primes,
+    unsigned int stage,
+    unsigned int m
+) {
+    unsigned int butterfly_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int prime_idx = blockIdx.y;
+
+    unsigned int total_butterflies = n / 2;
+
+    if (butterfly_idx >= total_butterflies || prime_idx >= num_primes) return;
+
+    unsigned long long q = moduli[prime_idx];
+
+    unsigned int prime_offset = prime_idx * n;
+    unsigned long long* coeffs = data + prime_offset;
+    const unsigned long long* twid_inv = twiddles_inv + prime_offset;
+
+    // Butterfly indices (inverse pattern)
+    unsigned int k = butterfly_idx / m;
+    unsigned int j = butterfly_idx % m;
+    unsigned int butterfly_span = m * 2;
+
+    unsigned int idx1 = k * butterfly_span + j;
+    unsigned int idx2 = idx1 + m;
+
+    // Inverse butterfly
+    unsigned long long a = coeffs[idx1];
+    unsigned long long b = coeffs[idx2];
+    unsigned long long w_inv = twid_inv[m + j];
+
+    unsigned long long sum = add_mod(a, b, q);
+    unsigned long long diff = sub_mod(a, b, q);
+    unsigned long long w_diff = mul_mod(w_inv, diff, q);
+
+    coeffs[idx1] = sum;
+    coeffs[idx2] = w_diff;
+}
+
+/**
+ * Batched Pointwise Multiplication - Process all primes in parallel
+ *
+ * c[prime_idx * n + i] = (a[...] * b[...]) % q[prime_idx]
+ * Grid: (coeff_blocks, num_primes, 1)
+ */
+__global__ void ntt_pointwise_multiply_batched(
+    const unsigned long long* a,
+    const unsigned long long* b,
+    unsigned long long* c,
+    const unsigned long long* moduli,
+    unsigned int n,
+    unsigned int num_primes
+) {
+    unsigned int coeff_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int prime_idx = blockIdx.y;
+
+    if (coeff_idx >= n || prime_idx >= num_primes) return;
+
+    unsigned long long q = moduli[prime_idx];
+    unsigned int idx = prime_idx * n + coeff_idx;
+
+    c[idx] = mul_mod(a[idx], b[idx], q);
+}
+
 } // extern "C"
