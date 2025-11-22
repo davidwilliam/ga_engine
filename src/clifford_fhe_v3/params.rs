@@ -59,13 +59,13 @@ impl CliffordFHEParams {
     pub fn new_v3_demo_cpu() -> Self {
         let n = 512;
 
-        println!("Generating V3 CPU demo parameters (N={}, 7 primes)...", n);
+        println!("Generating V3 CPU demo parameters (N={}, 10 primes)...", n);
 
         // Generate special 60-bit modulus
         let special_modulus = generate_special_modulus(n, 60);
 
-        // Generate 6 scaling primes (~40-bit)
-        let scaling_primes = generate_ntt_primes(n, 6, 40, 0);
+        // Generate 9 scaling primes (~40-bit) - need 9 for CoeffToSlot (log2(N/2) = 8) + 1 safety
+        let scaling_primes = generate_ntt_primes(n, 9, 40, 0);
 
         // Combine into single moduli vector
         let mut moduli = vec![special_modulus];
@@ -88,32 +88,33 @@ impl CliffordFHEParams {
         }
     }
 
-    /// V3 Bootstrap parameters (N=8192, 22 primes, depth ~15 with bootstrap)
+    /// V3 Bootstrap parameters (N=8192, 41 primes, sufficient depth for bootstrap)
     ///
     /// **Use for:** Deep encrypted GNN with bootstrapping
     ///
     /// **Modulus chain:** DYNAMICALLY GENERATED
     /// - 1 × 60-bit special prime (fast modular reduction)
-    /// - 21 × 41-bit scaling primes (≈ 2^40)
+    /// - 40 × 40-bit scaling primes (≈ 2^40)
     ///
     /// **Levels breakdown:**
-    /// - 12 primes reserved for bootstrap operations
-    /// - 7 primes for computation between bootstraps
-    /// - 2 primes for safety margin
+    /// - CoeffToSlot: 12 levels (log2(N/2) = 12)
+    /// - EvalMod: 16 levels (degree-23 polynomial with BSGS)
+    /// - SlotToCoeff: 12 levels (log2(N/2) = 12)
+    /// - Total: 40 levels for bootstrap
     ///
     /// **Security:** ~128 bits (NIST Level 1)
     ///
-    /// **Bootstrap frequency:** Every 5-7 multiplications
+    /// **Bootstrap frequency:** Every 1-2 multiplications
     pub fn new_v3_bootstrap_8192() -> Self {
         let n = 8192;
 
-        println!("Generating V3 bootstrap parameters (N={}, 22 primes)...", n);
+        println!("Generating V3 bootstrap parameters (N={}, 41 primes)...", n);
 
         // Generate special 60-bit modulus
         let special_modulus = generate_special_modulus(n, 60);
 
-        // Generate 21 scaling primes (~40-bit)
-        let scaling_primes = generate_ntt_primes(n, 21, 40, 0);
+        // Generate 40 scaling primes (~40-bit) - need 40 for bootstrap (12 + 16 + 12)
+        let scaling_primes = generate_ntt_primes(n, 40, 40, 0);
 
         // Combine into single moduli vector
         let mut moduli = vec![special_modulus];

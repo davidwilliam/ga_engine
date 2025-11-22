@@ -20,9 +20,9 @@ fn main() -> Result<(), String> {
     println!("║    V3 Bootstrap Test - Using CORRECT V3 Implementation (CPU transforms)      ║");
     println!("╚═══════════════════════════════════════════════════════════════════════════════╝\n");
 
-    // Test parameters: N=1024 with sufficient primes for bootstrap
-    println!("Step 1: Setting up parameters (N=1024, 20 primes for bootstrap)");
-    let params = CliffordFHEParams::new_v3_bootstrap_metal()?;
+    // Test parameters: N=8192 with sufficient primes for full bootstrap
+    println!("Step 1: Setting up parameters (N=8192, 41 primes for full bootstrap)");
+    let params = CliffordFHEParams::new_v3_bootstrap_8192();
 
     println!("  N = {}", params.n);
     println!("  Primes = {}", params.moduli.len());

@@ -1,9 +1,9 @@
-//! Quick CPU Demo: V3 Bootstrap with N=1024
+//! V3 Bootstrap Demo: Full Bootstrap Pipeline
 //!
-//! Demonstrates full V3 bootstrap pipeline with small parameters that complete in seconds.
+//! Demonstrates complete V3 bootstrap with production-like parameters.
 //!
-//! **Parameters**: N=512, 7 primes (1 special + 5 bootstrap + 1 computation)
-//! **Expected Time**: <2 seconds key generation, <10 seconds total
+//! **Parameters**: N=8192, 41 primes (full depth for bootstrap)
+//! **Expected Time**: ~20 seconds key generation, ~4 minutes total
 //!
 //! **Run Command**:
 //! ```bash
@@ -18,11 +18,12 @@ use std::time::Instant;
 
 fn main() {
     println!("╔═══════════════════════════════════════════════════════════════╗");
-    println!("║         V3 BOOTSTRAP: QUICK CPU DEMO (N=512)                  ║");
+    println!("║         V3 BOOTSTRAP: FULL DEMO (N=8192)                      ║");
     println!("╚═══════════════════════════════════════════════════════════════╝\n");
 
-    // Use CPU demo parameters (N=1024, 13 primes)
-    let params = CliffordFHEParams::new_v3_demo_cpu();
+    // Use V3 bootstrap parameters (N=8192, 22 primes)
+    // Note: This will be slower but has enough depth for bootstrap
+    let params = CliffordFHEParams::new_v3_bootstrap_8192();
 
     println!("Parameters:");
     println!("  N (ring dimension):     {}", params.n);
@@ -43,11 +44,11 @@ fn main() {
     // Step 2: Create Bootstrap Context (generates rotation keys)
     println!("═══ Step 2/4: Bootstrap Context Setup ═══");
     let start = Instant::now();
-    // Ultra-minimal bootstrap params for N=512
+    // Bootstrap params for N=8192 with production values
     let bootstrap_params = BootstrapParams {
-        sin_degree: 7,  // Minimal polynomial degree
-        bootstrap_levels: 5,  // Only 5 levels available
-        target_precision: 1e-1,  // Very loose precision (10% error OK)
+        sin_degree: 23,  // Standard degree for good precision
+        bootstrap_levels: 12,  // Recommended for N=8192
+        target_precision: 1e-3,  // 0.1% error (good precision)
     };
     let bootstrap_ctx = match BootstrapContext::new(params.clone(), bootstrap_params, &sk) {
         Ok(ctx) => ctx,
