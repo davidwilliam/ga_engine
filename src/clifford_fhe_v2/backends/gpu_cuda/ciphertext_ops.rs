@@ -77,12 +77,16 @@ impl CudaCiphertext {
         let c0_rescaled = ctx.exact_rescale_gpu_strided(&c0_mult, self.level)?;
         let c1_rescaled = ctx.exact_rescale_gpu_strided(&c1_mult, self.level)?;
 
+        // After rescaling, we drop one prime, so update both level and num_primes
+        let new_level = self.level.saturating_sub(1);
+        let new_num_primes = new_level + 1;
+
         Ok(Self {
             c0: c0_rescaled,
             c1: c1_rescaled,
             n: self.n,
-            num_primes: self.num_primes,
-            level: self.level.saturating_sub(1),
+            num_primes: new_num_primes,
+            level: new_level,
             scale: self.scale * plaintext.scale / ctx.params().scale,
         })
     }
