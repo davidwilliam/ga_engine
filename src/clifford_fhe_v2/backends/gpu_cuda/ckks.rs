@@ -546,14 +546,16 @@ impl CudaCkksContext {
             return Err("Ciphertexts must be at same level".to_string());
         }
 
-        let num_active_primes = ct1.level + 1;
-        let mut c0 = vec![0u64; self.params.n * self.params.moduli.len()];
-        let mut c1 = vec![0u64; self.params.n * self.params.moduli.len()];
+        // Use the actual num_primes from the input ciphertexts (not params.moduli.len())
+        let num_active_primes = ct1.num_primes;
+        let mut c0 = vec![0u64; self.params.n * num_active_primes];
+        let mut c1 = vec![0u64; self.params.n * num_active_primes];
 
         for coeff_idx in 0..self.params.n {
             for prime_idx in 0..num_active_primes {
                 let q = self.params.moduli[prime_idx];
-                let idx = coeff_idx * self.params.moduli.len() + prime_idx;
+                // Use num_active_primes (actual stride) instead of params.moduli.len()
+                let idx = coeff_idx * num_active_primes + prime_idx;
 
                 let sum0 = ct1.c0[idx] + ct2.c0[idx];
                 c0[idx] = if sum0 >= q { sum0 - q } else { sum0 };
@@ -567,7 +569,7 @@ impl CudaCkksContext {
             c0,
             c1,
             n: self.params.n,
-            num_primes: self.params.moduli.len(),
+            num_primes: num_active_primes,
             level: ct1.level,
             scale: ct1.scale,  // Assuming same scale
         })
