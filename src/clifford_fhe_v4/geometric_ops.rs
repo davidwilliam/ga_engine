@@ -228,15 +228,98 @@ fn insert_prime_into_flat(prime_coeffs: &[u64], flat: &mut [u64], n: usize, num_
     }
 }
 
-/// CUDA version (placeholder - will implement similarly to Metal)
+/// CUDA version - Full implementation using CudaGeometricProduct
 #[cfg(all(feature = "v2-gpu-cuda", not(feature = "v2-gpu-metal")))]
 pub fn geometric_product_packed(
-    _a: &PackedMultivector,
-    _b: &PackedMultivector,
-    _rot_keys: &RotationKeys,
-    _ckks_ctx: &CudaCkksContext,
+    a: &PackedMultivector,
+    b: &PackedMultivector,
+    rot_keys: &RotationKeys,
+    ckks_ctx: &CudaCkksContext,
 ) -> Result<PackedMultivector, String> {
-    Err("geometric_product_packed not yet implemented for CUDA backend".to_string())
+    use super::unpack_multivector;
+    use crate::clifford_fhe_v2::backends::gpu_cuda::geometric::CudaGeometricProduct;
+
+    if !a.is_compatible(b) {
+        return Err("Incompatible packed multivectors".to_string());
+    }
+
+    // Step 1: Unpack into component ciphertexts (RNS format) using butterfly transform
+    use super::packing_butterfly::unpack_multivector_butterfly;
+    let a_components = unpack_multivector_butterfly(a, rot_keys, ckks_ctx)?;
+    let b_components = unpack_multivector_butterfly(b, rot_keys, ckks_ctx)?;
+
+    let n = a.n;
+    let level = a.level;
+
+    // Use the actual number of primes from the unpacked ciphertexts
+    let num_primes = a_components[0].num_primes;
+    let moduli = &ckks_ctx.params().moduli[..num_primes];
+
+    // Step 2: Process each prime modulus separately
+    let mut result_components_rns = Vec::new();
+
+    for prime_idx in 0..num_primes {
+        let q = moduli[prime_idx];
+
+        // Find primitive root for this prime
+        let root = find_primitive_root_for_ntt(n, q)?;
+
+        // Create CUDA geometric product computer
+        let cuda_gp = CudaGeometricProduct::new(n, q, root)?;
+
+        // Step 2a: Extract polynomials for this prime from RNS representation
+        let mut a_prime: [[Vec<u64>; 2]; 8] = Default::default();
+        let mut b_prime: [[Vec<u64>; 2]; 8] = Default::default();
+
+        for comp in 0..8 {
+            // Extract c0 and c1 for this prime
+            a_prime[comp][0] = extract_prime_from_flat(&a_components[comp].c0, n, num_primes, prime_idx);
+            a_prime[comp][1] = extract_prime_from_flat(&a_components[comp].c1, n, num_primes, prime_idx);
+            b_prime[comp][0] = extract_prime_from_flat(&b_components[comp].c0, n, num_primes, prime_idx);
+            b_prime[comp][1] = extract_prime_from_flat(&b_components[comp].c1, n, num_primes, prime_idx);
+        }
+
+        // Step 2b: Compute geometric product for this prime
+        let result_prime = cuda_gp.geometric_product(&a_prime, &b_prime)?;
+
+        // Step 2c: Store results for later RNS reconstruction
+        if prime_idx == 0 {
+            // Initialize result vectors
+            let result_level = num_primes - 1;
+            for comp in 0..8 {
+                result_components_rns.push(Ciphertext {
+                    c0: vec![0u64; n * num_primes],
+                    c1: vec![0u64; n * num_primes],
+                    n,
+                    num_primes,
+                    level: result_level,
+                    scale: a.scale * b.scale,
+                });
+            }
+        }
+
+        // Insert this prime's results into the flat RNS layout
+        for comp in 0..8 {
+            insert_prime_into_flat(&result_prime[comp][0], &mut result_components_rns[comp].c0, n, num_primes, prime_idx);
+            insert_prime_into_flat(&result_prime[comp][1], &mut result_components_rns[comp].c1, n, num_primes, prime_idx);
+        }
+    }
+
+    // Step 3: Pack result components back into a single PackedMultivector
+    let result_array: [Ciphertext; 8] = [
+        result_components_rns[0].clone(),
+        result_components_rns[1].clone(),
+        result_components_rns[2].clone(),
+        result_components_rns[3].clone(),
+        result_components_rns[4].clone(),
+        result_components_rns[5].clone(),
+        result_components_rns[6].clone(),
+        result_components_rns[7].clone(),
+    ];
+
+    // Pack result components back using butterfly transform
+    use super::packing_butterfly::pack_multivector_butterfly;
+    pack_multivector_butterfly(&result_array, a.batch_size, rot_keys, ckks_ctx)
 }
 
 /// CPU version (placeholder)
@@ -285,12 +368,34 @@ pub fn wedge_product_packed(
 
 #[cfg(all(feature = "v2-gpu-cuda", not(feature = "v2-gpu-metal")))]
 pub fn wedge_product_packed(
-    _a: &PackedMultivector,
-    _b: &PackedMultivector,
-    _rot_keys: &RotationKeys,
-    _ckks_ctx: &CudaCkksContext,
+    a: &PackedMultivector,
+    b: &PackedMultivector,
+    rot_keys: &RotationKeys,
+    ckks_ctx: &CudaCkksContext,
 ) -> Result<PackedMultivector, String> {
-    Err("wedge_product_packed not yet implemented for CUDA backend".to_string())
+    if !a.is_compatible(b) {
+        return Err("Incompatible packed multivectors".to_string());
+    }
+
+    // wedge(a,b) = (geometric(a,b) - geometric(b,a)) / 2
+    let ab = geometric_product_packed(a, b, rot_keys, ckks_ctx)?;
+    let ba = geometric_product_packed(b, a, rot_keys, ckks_ctx)?;
+    let diff = subtract_packed(&ab, &ba, ckks_ctx)?;
+
+    // Multiply by 0.5
+    #[cfg(feature = "v2-gpu-cuda")]
+    let half = ckks_ctx.encode(&vec![0.5], ckks_ctx.params().scale, a.level)?;
+
+    let result_ct = diff.ct.multiply_plain(&half, ckks_ctx)?;
+
+    Ok(PackedMultivector::new(
+        result_ct,
+        a.batch_size,
+        a.n,
+        a.num_primes,
+        a.level,
+        diff.scale * 0.5,
+    ))
 }
 
 /// Inner product: a · b = (ab + ba) / 2 (packed version)
@@ -329,12 +434,34 @@ pub fn inner_product_packed(
 
 #[cfg(all(feature = "v2-gpu-cuda", not(feature = "v2-gpu-metal")))]
 pub fn inner_product_packed(
-    _a: &PackedMultivector,
-    _b: &PackedMultivector,
-    _rot_keys: &RotationKeys,
-    _ckks_ctx: &CudaCkksContext,
+    a: &PackedMultivector,
+    b: &PackedMultivector,
+    rot_keys: &RotationKeys,
+    ckks_ctx: &CudaCkksContext,
 ) -> Result<PackedMultivector, String> {
-    Err("inner_product_packed not yet implemented for CUDA backend".to_string())
+    if !a.is_compatible(b) {
+        return Err("Incompatible packed multivectors".to_string());
+    }
+
+    // inner(a,b) = (geometric(a,b) + geometric(b,a)) / 2
+    let ab = geometric_product_packed(a, b, rot_keys, ckks_ctx)?;
+    let ba = geometric_product_packed(b, a, rot_keys, ckks_ctx)?;
+    let sum = add_packed(&ab, &ba, ckks_ctx)?;
+
+    // Multiply by 0.5
+    #[cfg(feature = "v2-gpu-cuda")]
+    let half = ckks_ctx.encode(&vec![0.5], ckks_ctx.params().scale, a.level)?;
+
+    let result_ct = sum.ct.multiply_plain(&half, ckks_ctx)?;
+
+    Ok(PackedMultivector::new(
+        result_ct,
+        a.batch_size,
+        a.n,
+        a.num_primes,
+        a.level,
+        sum.scale * 0.5,
+    ))
 }
 
 /// CPU versions (placeholder)
