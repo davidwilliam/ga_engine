@@ -159,10 +159,10 @@ pub fn geometric_product_packed(
 
         for comp in 0..8 {
             // Extract c0 and c1 for this prime
-            a_prime[comp][0] = extract_prime_from_flat(&a_components[comp].c0, n, num_primes, prime_idx);
-            a_prime[comp][1] = extract_prime_from_flat(&a_components[comp].c1, n, num_primes, prime_idx);
-            b_prime[comp][0] = extract_prime_from_flat(&b_components[comp].c0, n, num_primes, prime_idx);
-            b_prime[comp][1] = extract_prime_from_flat(&b_components[comp].c1, n, num_primes, prime_idx);
+            a_prime[comp][0] = extract_prime_from_strided(&a_components[comp].c0, n, num_primes, prime_idx);
+            a_prime[comp][1] = extract_prime_from_strided(&a_components[comp].c1, n, num_primes, prime_idx);
+            b_prime[comp][0] = extract_prime_from_strided(&b_components[comp].c0, n, num_primes, prime_idx);
+            b_prime[comp][1] = extract_prime_from_strided(&b_components[comp].c1, n, num_primes, prime_idx);
         }
 
         // Step 2b: Compute geometric product for this prime
@@ -187,8 +187,8 @@ pub fn geometric_product_packed(
 
         // Insert this prime's results into the flat RNS layout
         for comp in 0..8 {
-            insert_prime_into_flat(&result_prime[comp][0], &mut result_components_rns[comp].c0, n, num_primes, prime_idx);
-            insert_prime_into_flat(&result_prime[comp][1], &mut result_components_rns[comp].c1, n, num_primes, prime_idx);
+            insert_prime_into_strided(&result_prime[comp][0], &mut result_components_rns[comp].c0, n, num_primes, prime_idx);
+            insert_prime_into_strided(&result_prime[comp][1], &mut result_components_rns[comp].c1, n, num_primes, prime_idx);
         }
     }
 
@@ -209,22 +209,25 @@ pub fn geometric_product_packed(
     pack_multivector_butterfly(&result_array, a.batch_size, rot_keys, ckks_ctx)
 }
 
-/// Extract coefficients for a single prime from flat RNS layout
+/// Extract coefficients for a single prime from strided RNS layout
 ///
-/// Flat layout: [c0_q0, c0_q1, ..., c1_q0, c1_q1, ..., c_{n-1}_q0, c_{n-1}_q1, ...]
+/// Strided layout (CUDA): [coeff_0 for all primes, coeff_1 for all primes, ...]
+/// where each coefficient block is: [c_q0, c_q1, ..., c_qL]
 /// Returns: [c0, c1, ..., c_{n-1}] for the specified prime
-fn extract_prime_from_flat(flat: &[u64], n: usize, num_primes: usize, prime_idx: usize) -> Vec<u64> {
+fn extract_prime_from_strided(strided: &[u64], n: usize, num_primes: usize, prime_idx: usize) -> Vec<u64> {
     let mut result = vec![0u64; n];
-    for i in 0..n {
-        result[i] = flat[i * num_primes + prime_idx];
+    for coeff_idx in 0..n {
+        let idx = coeff_idx * num_primes + prime_idx;
+        result[coeff_idx] = strided[idx];
     }
     result
 }
 
-/// Insert coefficients for a single prime into flat RNS layout
-fn insert_prime_into_flat(prime_coeffs: &[u64], flat: &mut [u64], n: usize, num_primes: usize, prime_idx: usize) {
-    for i in 0..n {
-        flat[i * num_primes + prime_idx] = prime_coeffs[i];
+/// Insert coefficients for a single prime into strided RNS layout
+fn insert_prime_into_strided(prime_coeffs: &[u64], strided: &mut [u64], n: usize, num_primes: usize, prime_idx: usize) {
+    for coeff_idx in 0..n {
+        let idx = coeff_idx * num_primes + prime_idx;
+        strided[idx] = prime_coeffs[coeff_idx];
     }
 }
 
@@ -273,10 +276,10 @@ pub fn geometric_product_packed(
 
         for comp in 0..8 {
             // Extract c0 and c1 for this prime
-            a_prime[comp][0] = extract_prime_from_flat(&a_components[comp].c0, n, num_primes, prime_idx);
-            a_prime[comp][1] = extract_prime_from_flat(&a_components[comp].c1, n, num_primes, prime_idx);
-            b_prime[comp][0] = extract_prime_from_flat(&b_components[comp].c0, n, num_primes, prime_idx);
-            b_prime[comp][1] = extract_prime_from_flat(&b_components[comp].c1, n, num_primes, prime_idx);
+            a_prime[comp][0] = extract_prime_from_strided(&a_components[comp].c0, n, num_primes, prime_idx);
+            a_prime[comp][1] = extract_prime_from_strided(&a_components[comp].c1, n, num_primes, prime_idx);
+            b_prime[comp][0] = extract_prime_from_strided(&b_components[comp].c0, n, num_primes, prime_idx);
+            b_prime[comp][1] = extract_prime_from_strided(&b_components[comp].c1, n, num_primes, prime_idx);
         }
 
         // Step 2b: Compute geometric product for this prime
@@ -300,8 +303,8 @@ pub fn geometric_product_packed(
 
         // Insert this prime's results into the flat RNS layout
         for comp in 0..8 {
-            insert_prime_into_flat(&result_prime[comp][0], &mut result_components_rns[comp].c0, n, num_primes, prime_idx);
-            insert_prime_into_flat(&result_prime[comp][1], &mut result_components_rns[comp].c1, n, num_primes, prime_idx);
+            insert_prime_into_strided(&result_prime[comp][0], &mut result_components_rns[comp].c0, n, num_primes, prime_idx);
+            insert_prime_into_strided(&result_prime[comp][1], &mut result_components_rns[comp].c1, n, num_primes, prime_idx);
         }
     }
 
