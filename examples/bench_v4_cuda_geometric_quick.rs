@@ -187,7 +187,7 @@ fn main() -> Result<(), String> {
     println!("      For production benchmarks, use bench_v4_cuda_geometric.rs");
     println!();
     println!("✅ V4 CUDA GEOMETRIC PRODUCT WORKING!");
-    println!("   Full implementation, no workarounds, ready for FSE 2026!\n");
+    println!("   Full implementation, no workarounds!\n");
 
     Ok(())
 }

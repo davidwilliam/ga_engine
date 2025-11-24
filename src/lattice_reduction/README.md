@@ -1,6 +1,6 @@
 # Lattice Reduction Module
 
-GA-accelerated lattice reduction for cryptanalysis, targeting FSE 2026 submission.
+GA-accelerated lattice reduction for cryptanalysis.
 
 ## Overview
 
@@ -209,7 +209,7 @@ cargo test --lib lattice_reduction::rotor_nd
 - [ ] Documentation
 - [ ] Benchmark suite
 - [ ] Result visualization
-- [ ] FSE paper draft
+- [ ] Technical documentation
 
 ## References
 
@@ -231,7 +231,7 @@ cargo test --lib lattice_reduction::rotor_nd
 
 ## Contributing
 
-This is research code for an FSE 2026 submission. See `paper/fse2026/IMPLEMENTATION_PLAN.md` for the complete development plan.
+This is research code for lattice reduction with geometric algebra optimizations.
 
 ## License
 
