@@ -768,9 +768,12 @@ impl CudaCkksContext {
         let ifft = planner.plan_fft_inverse(self.params.n);
         ifft.process(&mut extended);
 
-        // Scale by N
+        // rustfft's inverse FFT does NOT normalize (confirmed in v1/slot_encoding.rs:132)
+        // We need to apply 2/N normalization to match CPU canonical embedding
+        // CPU uses: coeffs_float[j] = (2.0 / n) * sum
+        let normalization = 2.0 / self.params.n as f64;
         for val in &mut extended {
-            *val *= self.params.n as f64;
+            *val *= normalization;
         }
 
         extended
