@@ -715,7 +715,7 @@ impl CudaCkksContext {
 
         let mut complex_vals = vec![Complex::new(0.0, 0.0); slots];
         for (i, &val) in values.iter().enumerate() {
-            complex_vals[i] = Complex::new(val * scale, 0.0);
+            complex_vals[i] = Complex::new(val, 0.0);  // Do NOT pre-scale
         }
 
         // Inverse canonical embedding
@@ -726,8 +726,8 @@ impl CudaCkksContext {
         let mut poly = vec![0u64; self.params.n * num_primes];
 
         for coeff_idx in 0..self.params.n {
-            // Round the real part (CKKS encoding ensures imaginary part is ~0)
-            let val = coeffs[coeff_idx].re.round();
+            // Scale AFTER inverse embedding, then round
+            let val = (coeffs[coeff_idx].re * scale).round();
             for prime_idx in 0..num_primes {
                 let q = self.params.moduli[prime_idx];
                 let val_mod = if val >= 0.0 {
