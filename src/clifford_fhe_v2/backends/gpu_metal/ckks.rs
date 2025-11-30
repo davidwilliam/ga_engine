@@ -237,10 +237,12 @@ impl MetalCkksContext {
             let val = pt.coeffs[i * num_primes]; // Use first RNS component
 
             // Convert from mod q to signed integer (centered representation)
-            coeffs_i64[i] = if val <= q0 / 2 {
-                val as i64
-            } else {
+            // Values > q/2 are treated as negative (centered lift)
+            let half_q0 = q0 / 2;
+            coeffs_i64[i] = if val > half_q0 {
                 -((q0 - val) as i64)
+            } else {
+                val as i64
             };
         }
 
@@ -649,6 +651,81 @@ impl MetalCkksContext {
     /// Public for use by bootstrap operations.
     pub fn multiply_polys_flat_ntt_negacyclic(&self, a_flat: &[u64], b_flat: &[u64], moduli: &[u64]) -> Result<Vec<u64>, String> {
         self.multiply_polys_flat_ntt_impl(a_flat, b_flat, moduli, true)
+    }
+
+    /// Multiply coefficient-form polynomial by NTT-form polynomial (asymmetric multiplication)
+    ///
+    /// **State-of-the-art optimization for relinearization:**
+    /// EVK is pre-transformed to NTT domain, saving one forward NTT per multiplication.
+    ///
+    /// - `a_flat`: Coefficient-form polynomial (e.g., gadget digit) [n × stride_a]
+    /// - `b_ntt_flat`: NTT-form polynomial (e.g., pre-transformed EVK) [n × stride_b]
+    /// - `moduli`: Active primes for this level
+    /// - Returns: Coefficient-form result [n × num_primes]
+    pub fn multiply_coeff_by_ntt(&self, a_flat: &[u64], b_ntt_flat: &[u64], moduli: &[u64]) -> Result<Vec<u64>, String> {
+        let n = self.params.n;
+        let num_primes = moduli.len();
+
+        // Infer strides from input lengths
+        let a_stride = a_flat.len() / n;
+        let b_stride = b_ntt_flat.len() / n;
+
+        // Debug
+        if std::env::var("ASYM_DEBUG").is_ok() {
+            println!("[ASYM_DEBUG] n={}, num_primes={}, a_len={}, b_len={}, a_stride={}, b_stride={}",
+                n, num_primes, a_flat.len(), b_ntt_flat.len(), a_stride, b_stride);
+        }
+
+        if a_stride < num_primes || b_stride < num_primes {
+            return Err(format!("Input strides too small: a_stride={}, b_stride={}, need {}",
+                a_stride, b_stride, num_primes));
+        }
+
+        let mut result_flat = vec![0u64; n * num_primes];
+
+        // Process each RNS component independently (fully parallel)
+        for (prime_idx, &q) in moduli.iter().enumerate() {
+            // Extract coefficient polynomial for this prime
+            let mut a_poly = vec![0u64; n];
+            for i in 0..n {
+                a_poly[i] = a_flat[i * a_stride + prime_idx];
+            }
+
+            // Extract NTT polynomial for this prime (already in NTT domain!)
+            let mut b_ntt_poly = vec![0u64; n];
+            for i in 0..n {
+                b_ntt_poly[i] = b_ntt_flat[i * b_stride + prime_idx];
+            }
+
+            let ntt_ctx = &self.ntt_contexts[prime_idx];
+
+            // TWIST: Apply ψ^i to convert negacyclic → cyclic
+            for i in 0..n {
+                a_poly[i] = Self::mul_mod(a_poly[i], ntt_ctx.psi_powers()[i], q);
+            }
+
+            // Forward NTT on coefficient input only (b already in NTT domain)
+            ntt_ctx.forward(&mut a_poly)?;
+
+            // Pointwise multiply in NTT domain
+            let mut result_ntt = vec![0u64; n];
+            ntt_ctx.pointwise_multiply(&a_poly, &b_ntt_poly, &mut result_ntt)?;
+
+            // Inverse NTT
+            ntt_ctx.inverse(&mut result_ntt)?;
+
+            // UNTWIST: Apply ψ^{-i} to convert cyclic → negacyclic
+            for i in 0..n {
+                result_ntt[i] = Self::mul_mod(result_ntt[i], ntt_ctx.psi_inv_powers()[i], q);
+            }
+
+            // Store in output flat layout
+            for i in 0..n {
+                result_flat[i * num_primes + prime_idx] = result_ntt[i];
+            }
+        }
+
+        Ok(result_flat)
     }
 
     /// Internal implementation of polynomial multiplication with optional twist/untwist
@@ -2161,74 +2238,94 @@ impl MetalCiphertext {
 
         let mut digits = vec![vec![0u64; n * num_primes]; num_digits];
 
-        // Decompose each coefficient using CRT
+        // Decompose each coefficient using CRT (EXACTLY matching CPU implementation)
         for i in 0..n {
-            // Reconstruct coefficient from RNS to BigInt
-            let mut coeff_big = BigInt::zero();
+            // Debug: print input residues for first coefficient
+            if std::env::var("CRT_DEBUG").is_ok() && i == 0 {
+                print!("[CRT_DEBUG Metal] coeff[0] input residues: ");
+                for j in 0..num_primes {
+                    print!("{} ", poly[i * num_primes + j]);
+                }
+                println!();
+            }
+
+            // Step 1: CRT reconstruct to get x ∈ [0, Q)
+            let mut x_big = BigInt::zero();
             for (j, &q) in moduli.iter().enumerate() {
                 let idx = i * num_primes + j;
                 let residue = poly[idx];
 
-                // CRT reconstruction
                 let q_big = BigInt::from(q);
-                let q_inv = &q_prod_big / &q_big;
-                let q_inv_mod = Self::mod_inverse_bigint(&q_inv, &q_big)?;
-                let term = BigInt::from(residue) * q_inv * q_inv_mod;
-                coeff_big += term;
+                let q_i = &q_prod_big / &q_big;
+
+                // Compute q_i^(-1) mod q using extended GCD
+                let qi_inv = Self::mod_inverse_bigint(&q_i, &q_big)?;
+
+                let ri_big = BigInt::from(residue);
+                // Compute: basis = (Q/qi) * inv mod Q, then term = ri * basis mod Q
+                let basis = (&q_i * &qi_inv) % &q_prod_big;
+                let term = (ri_big * basis) % &q_prod_big;
+                x_big = (&x_big + term) % &q_prod_big;
             }
-            coeff_big %= &q_prod_big;
 
-            // Center around zero: if coeff > Q/2, subtract Q
-            if coeff_big > q_half_big {
-                coeff_big -= &q_prod_big;
+            // Ensure result is positive
+            if x_big.sign() == num_bigint::Sign::Minus {
+                x_big += &q_prod_big;
             }
 
-            // Decompose into base-B digits with EXACT floor division
-            // CRITICAL: Use exact division, not bit shift, for correct handling of negatives!
-            use num_integer::Integer;
+            // Debug: print reconstructed value for first coefficient
+            if std::env::var("CRT_DEBUG").is_ok() && i == 0 {
+                println!("[CRT_DEBUG Metal] coeff[0] after CRT: {}", x_big);
+            }
 
-            let mut remaining = coeff_big.clone();
-            let half_base = &base_big / 2;
-            let mut digits_big: Vec<BigInt> = Vec::new();
+            // Step 2: Center-lift to x_c ∈ (-Q/2, Q/2]
+            let x_centered_big = if x_big > q_half_big {
+                x_big - &q_prod_big
+            } else {
+                x_big
+            };
 
-            // Decompose until remaining is zero (dynamic digit count)
-            while !remaining.is_zero() {
-                // Extract digit_t = (remaining mod B) in range [0, B)
-                let mut digit_t = remaining.mod_floor(&base_big);
+            // Debug: print centered value for first coefficient
+            if std::env::var("CRT_DEBUG").is_ok() && i == 0 {
+                println!("[CRT_DEBUG Metal] coeff[0] after centering: {}", x_centered_big);
+            }
 
-                // CENTER the digit: if digit > B/2, subtract B to get negative digit
-                // This keeps digits in range (-B/2, B/2] instead of [0, B)
-                if digit_t > half_base {
-                    digit_t -= &base_big;
+            // Step 3: Balanced decomposition in Z (FIXED: use fixed loop like CPU)
+            let mut remainder_big = x_centered_big;
+            let half_base_big = &base_big / 2;
+
+            for t in 0..num_digits {
+                // Extract digit dt ∈ (-B/2, B/2] (balanced, matching CPU logic)
+                let dt_unbalanced = &remainder_big % &base_big;
+                let dt_big = if dt_unbalanced > half_base_big {
+                    &dt_unbalanced - &base_big  // Shift to negative range
+                } else {
+                    dt_unbalanced
+                };
+
+                // Debug: print first digit for first coefficient
+                if std::env::var("GADGET_DEBUG").is_ok() && i == 0 && t == 0 {
+                    println!("[GADGET_DEBUG Metal] coeff[0] digit[0]: dt_big={}", dt_big);
                 }
 
-                digits_big.push(digit_t.clone());
-
-                // EXACT floor division: (remaining - digit_t) / B
-                // This is correct for negative values, unlike >> which is implementation-dependent
-                remaining = (&remaining - &digit_t).div_floor(&base_big);
-            }
-
-            // Convert BigInt digits to per-prime residues
-            let actual_num_digits = digits_big.len();
-            for (t, d) in digits_big.iter().enumerate() {
-                if t >= num_digits {
-                    break; // Safety check: don't overflow pre-allocated storage
-                }
-
+                // Convert dt to residues mod each prime
                 for (j, &q) in moduli.iter().enumerate() {
                     let idx = i * num_primes + j;
+                    let q_big = BigInt::from(q);
+                    let mut dt_mod_q_big = &dt_big % &q_big;
+                    if dt_mod_q_big.sign() == num_bigint::Sign::Minus {
+                        dt_mod_q_big += &q_big;
+                    }
+                    digits[t][idx] = dt_mod_q_big.to_u64().unwrap_or(0);
 
-                    // Convert centered digit to canonical form mod q
-                    let digit_unsigned = if d < &BigInt::zero() {
-                        let x = (-d).mod_floor(&BigInt::from(q)).to_u64().unwrap_or(0);
-                        if x == 0 { 0 } else { q - x }
-                    } else {
-                        d.mod_floor(&BigInt::from(q)).to_u64().unwrap_or(0)
-                    };
-
-                    digits[t][idx] = digit_unsigned;
+                    // Debug: print conversion
+                    if std::env::var("GADGET_DEBUG").is_ok() && i == 0 && t == 0 {
+                        println!("[GADGET_DEBUG Metal] coeff[0] digit[0] prime[{}]: dt_mod_q={} (idx={})", j, digits[t][idx], idx);
+                    }
                 }
+
+                // Update remainder: (x_c - dt) / B (exact division, matches CPU)
+                remainder_big = (remainder_big - &dt_big) / &base_big;
             }
         }
 
@@ -2299,6 +2396,20 @@ impl MetalCiphertext {
         let level = self.level;
         let num_primes = level + 1;
 
+        // Debug: print input c1 values
+        if std::env::var("C1_DEBUG").is_ok() {
+            print!("[C1_DEBUG Metal] self.c1[0] across primes: ");
+            for j in 0..num_primes {
+                print!("{} ", self.c1[0 * num_primes + j]);
+            }
+            println!();
+            print!("[C1_DEBUG Metal] other.c1[0] across primes: ");
+            for j in 0..num_primes {
+                print!("{} ", other.c1[0 * num_primes + j]);
+            }
+            println!();
+        }
+
         // Step 1: Tensor product using NTT multiplication
         // ct_mult = (c0×d0, c0×d1 + c1×d0, c1×d1)
 
@@ -2323,12 +2434,44 @@ impl MetalCiphertext {
             &ctx.params.moduli[..num_primes],
         )?;
 
+        // Debug: print c1 values BEFORE multiplication
+        if std::env::var("POLY_DEBUG").is_ok() {
+            print!("[POLY_DEBUG Metal] BEFORE mult - self.c1[0:2] prime 0: ");
+            for i in 0..2.min(n) {
+                print!("{} ", self.c1[i * num_primes + 0]);
+            }
+            println!();
+            print!("[POLY_DEBUG Metal] BEFORE mult - other.c1[0:2] prime 0: ");
+            for i in 0..2.min(n) {
+                print!("{} ", other.c1[i * num_primes + 0]);
+            }
+            println!();
+        }
+
         // c1 × d1 (this is c2 component)
         let c2 = ctx.multiply_polys_flat_ntt_negacyclic(
             &self.c1,
             &other.c1,
             &ctx.params.moduli[..num_primes],
         )?;
+
+        // Debug: print c2 values AFTER multiplication
+        if std::env::var("POLY_DEBUG").is_ok() {
+            print!("[POLY_DEBUG Metal] AFTER mult - c2[0:2] prime 0: ");
+            for i in 0..2.min(n) {
+                print!("{} ", c2[i * num_primes + 0]);
+            }
+            println!();
+        }
+
+        // Debug: print c2 values before gadget decomposition
+        if std::env::var("C2_DEBUG").is_ok() {
+            print!("[C2_DEBUG Metal] c2[0] across primes: ");
+            for j in 0..num_primes {
+                print!("{} ", c2[0 * num_primes + j]);
+            }
+            println!();
+        }
 
         // ct0_ct1 + ct1_ct0 (middle term)
         let mut ct1_temp = vec![0u64; n * num_primes];
@@ -2341,13 +2484,52 @@ impl MetalCiphertext {
         let mut result_c0 = ct0_ct0;
         let mut result_c1 = ct1_temp;
 
+        // Debug: print values before relinearization
+        if std::env::var("RELIN_DEBUG").is_ok() {
+            println!("[RELIN_DEBUG Metal] Before relinearization:");
+            print!("  c0[0] across {} primes: ", num_primes);
+            for j in 0..num_primes {
+                print!("{} ", result_c0[0 * num_primes + j]);
+            }
+            println!();
+            print!("  c1[0] across {} primes: ", num_primes);
+            for j in 0..num_primes {
+                print!("{} ", result_c1[0 * num_primes + j]);
+            }
+            println!();
+            print!("  c2[0] across {} primes: ", num_primes);
+            for j in 0..num_primes {
+                print!("{} ", c2[0 * num_primes + j]);
+            }
+            println!();
+        }
+
         // Step 2: Relinearization - convert c2·s² into (Δc0, Δc1)
-        // using key switching with gadget decomposition
+        // EXACTLY matches CPU relinearize_degree2 logic from multiplication.rs:158-197
 
-        let (base_w, num_digits) = relin_keys.gadget_params();
-        let (rlk0_ntt, rlk1_ntt) = relin_keys.get_ntt_keys(level)?;
+        let (base_w, _max_num_digits) = relin_keys.gadget_params();
+        let (rlk0_coeff, rlk1_coeff) = relin_keys.get_coeff_keys(level)?;
 
-        // Gadget decompose c2 into digits
+        // Debug: print EVK values RIGHT AFTER retrieval
+        if std::env::var("EVK_IMMEDIATE_DEBUG").is_ok() {
+            print!("[EVK_IMMEDIATE_DEBUG] RIGHT AFTER get_coeff_keys, rlk0_coeff[0][coeff=0] primes: ");
+            for j in 0..num_primes {
+                print!("{} ", rlk0_coeff[0][0 * num_primes + j]);
+            }
+            println!();
+        }
+
+        // Debug: print EVK shapes
+        if std::env::var("EVK_DEBUG").is_ok() {
+            println!("[EVK_DEBUG Metal] level={}, num_primes={}", level, num_primes);
+            println!("[EVK_DEBUG Metal] rlk0_coeff.len()={}", rlk0_coeff.len());
+            if !rlk0_coeff.is_empty() {
+                println!("[EVK_DEBUG Metal] rlk0_coeff[0].len()={} (expected n×num_primes = {})",
+                    rlk0_coeff[0].len(), n * num_primes);
+            }
+        }
+
+        // Gadget decompose c2 into digits (CPU uses CRT-based decomposition)
         let c2_digits = Self::gadget_decompose_flat(
             &c2,
             base_w,
@@ -2355,39 +2537,147 @@ impl MetalCiphertext {
             n,
         )?;
 
-        // Apply key switching: sum over digits of d_i × rlk
-        for digit_idx in 0..num_digits {
-            let d_i = &c2_digits[digit_idx];
+        // Debug: print first few values of first digit
+        if std::env::var("MULT_DEBUG").is_ok() && c2_digits.len() > 0 {
+            println!("[MULT_DEBUG] Metal gadget decomposition:");
+            println!("  num_digits: {}", c2_digits.len());
+            println!("  first digit, first 4 coeffs × {} primes:", n.min(4));
+            for i in 0..n.min(4) {
+                print!("    coeff[{}]: ", i);
+                for j in 0..num_primes {
+                    print!("{} ", c2_digits[0][i * num_primes + j]);
+                }
+                println!();
+            }
+        }
 
-            // Δc0 += d_i × rlk0[digit_idx]
-            let term0 = ctx.multiply_polys_flat_ntt_negacyclic(
-                d_i,
-                &rlk0_ntt[digit_idx],
-                &ctx.params.moduli[..num_primes],
-            )?;
-
-            for i in 0..(n * num_primes) {
-                let q = ctx.params.moduli[i % num_primes];
-                result_c0[i] = ((result_c0[i] as u128 + term0[i] as u128) % q as u128) as u64;
+        // For each digit in the decomposition (matches CPU loop at line 177)
+        for (t, d2_digit) in c2_digits.iter().enumerate() {
+            if t >= rlk0_coeff.len() {
+                break; // No more evaluation key components (matches CPU line 178)
             }
 
-            // Δc1 += d_i × rlk1[digit_idx]
-            let term1 = ctx.multiply_polys_flat_ntt_negacyclic(
-                d_i,
-                &rlk1_ntt[digit_idx],
+            // Multiply d2_digit by evk[t] and accumulate
+            // The EVK encrypts -B^t·s², so we SUBTRACT term0 and ADD term1
+            // (Matches CPU comments at lines 182-185)
+
+            // term0 = d2_digit × evk0[t] (both in coefficient-form)
+            if std::env::var("DETAIL_DEBUG").is_ok() && t == 0 {
+                print!("[DETAIL_DEBUG Metal] digit[0] coeff[0] primes: ");
+                for j in 0..num_primes {
+                    print!("{} ", d2_digit[0 * num_primes + j]);
+                }
+                println!();
+                print!("[DETAIL_DEBUG Metal] evk0[0] coeff[0] primes: ");
+                for j in 0..num_primes {
+                    print!("{} ", rlk0_coeff[t][0 * num_primes + j]);
+                }
+                println!();
+            }
+
+            let term0 = ctx.multiply_polys_flat_ntt_negacyclic(
+                d2_digit,
+                &rlk0_coeff[t],
                 &ctx.params.moduli[..num_primes],
             )?;
 
+            if std::env::var("DETAIL_DEBUG").is_ok() && t == 0 {
+                print!("[DETAIL_DEBUG Metal] term0 coeff[0] primes: ");
+                for j in 0..num_primes {
+                    print!("{} ", term0[0 * num_primes + j]);
+                }
+                println!();
+            }
+
+            // term1 = d2_digit × evk1[t] (both in coefficient-form)
+            let term1 = ctx.multiply_polys_flat_ntt_negacyclic(
+                d2_digit,
+                &rlk1_coeff[t],
+                &ctx.params.moduli[..num_primes],
+            )?;
+
+            if std::env::var("DETAIL_DEBUG").is_ok() && t == 0 {
+                print!("[DETAIL_DEBUG Metal] term1 coeff[0] primes: ");
+                for j in 0..num_primes {
+                    print!("{} ", term1[0 * num_primes + j]);
+                }
+                println!();
+                print!("[DETAIL_DEBUG Metal] result_c0[0] BEFORE subtract: ");
+                for j in 0..num_primes {
+                    print!("{} ", result_c0[0 * num_primes + j]);
+                }
+                println!();
+                print!("[DETAIL_DEBUG Metal] result_c1[0] BEFORE add: ");
+                for j in 0..num_primes {
+                    print!("{} ", result_c1[0 * num_primes + j]);
+                }
+                println!();
+            }
+
+            // c0 -= term0 (CPU line 191: c0[i] = c0[i].sub(&term0[i]))
+            for i in 0..(n * num_primes) {
+                let q = ctx.params.moduli[i % num_primes];
+                result_c0[i] = if result_c0[i] >= term0[i] {
+                    result_c0[i] - term0[i]
+                } else {
+                    q - (term0[i] - result_c0[i])
+                };
+            }
+
+            // c1 += term1 (CPU line 192: c1[i] = c1[i].add(&term1[i]))
             for i in 0..(n * num_primes) {
                 let q = ctx.params.moduli[i % num_primes];
                 result_c1[i] = ((result_c1[i] as u128 + term1[i] as u128) % q as u128) as u64;
             }
+
+            if std::env::var("DETAIL_DEBUG").is_ok() && t == 0 {
+                print!("[DETAIL_DEBUG Metal] result_c0[0] AFTER subtract: ");
+                for j in 0..num_primes {
+                    print!("{} ", result_c0[0 * num_primes + j]);
+                }
+                println!();
+                print!("[DETAIL_DEBUG Metal] result_c1[0] AFTER add: ");
+                for j in 0..num_primes {
+                    print!("{} ", result_c1[0 * num_primes + j]);
+                }
+                println!();
+            }
+        }
+
+        // Debug: print values after relinearization
+        if std::env::var("RELIN_DEBUG").is_ok() {
+            println!("[RELIN_DEBUG Metal] After relinearization:");
+            print!("  c0[0] across {} primes: ", num_primes);
+            for j in 0..num_primes {
+                print!("{} ", result_c0[0 * num_primes + j]);
+            }
+            println!();
+            print!("  c1[0] across {} primes: ", num_primes);
+            for j in 0..num_primes {
+                print!("{} ", result_c1[0 * num_primes + j]);
+            }
+            println!();
         }
 
         // Step 3: Rescale to drop one prime
         let new_level = level - 1;
         let result_c0_rescaled = ctx.exact_rescale_gpu(&result_c0, level)?;
         let result_c1_rescaled = ctx.exact_rescale_gpu(&result_c1, level)?;
+
+        // Debug: print values after rescaling
+        if std::env::var("RELIN_DEBUG").is_ok() {
+            println!("[RELIN_DEBUG Metal] After rescaling:");
+            print!("  c0[0] across {} primes: ", new_level + 1);
+            for j in 0..(new_level + 1) {
+                print!("{} ", result_c0_rescaled[0 * (new_level + 1) + j]);
+            }
+            println!();
+            print!("  c1[0] across {} primes: ", new_level + 1);
+            for j in 0..(new_level + 1) {
+                print!("{} ", result_c1_rescaled[0 * (new_level + 1) + j]);
+            }
+            println!();
+        }
 
         // New scale is scale1 × scale2 / q_L (approximately scale²)
         let new_scale = (self.scale * other.scale) / ctx.params.moduli[level] as f64;

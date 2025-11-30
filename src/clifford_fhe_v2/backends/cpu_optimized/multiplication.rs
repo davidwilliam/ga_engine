@@ -130,6 +130,20 @@ fn multiply_polynomials(
         let a_mod_q: Vec<u64> = a.iter().map(|rns| rns.values[prime_idx]).collect();
         let b_mod_q: Vec<u64> = b.iter().map(|rns| rns.values[prime_idx]).collect();
 
+        // Debug: print inputs before multiplication
+        if std::env::var("POLY_DEBUG").is_ok() && prime_idx == 0 {
+            print!("[POLY_DEBUG CPU] BEFORE mult - a[0:2] prime 0: ");
+            for i in 0..2.min(a_mod_q.len()) {
+                print!("{} ", a_mod_q[i]);
+            }
+            println!();
+            print!("[POLY_DEBUG CPU] BEFORE mult - b[0:2] prime 0: ");
+            for i in 0..2.min(b_mod_q.len()) {
+                print!("{} ", b_mod_q[i]);
+            }
+            println!();
+        }
+
         // Find the NTT context for this prime
         let ntt_ctx = key_ctx
             .ntt_contexts
@@ -139,6 +153,15 @@ fn multiply_polynomials(
 
         // Multiply using NTT
         let product_mod_q = ntt_ctx.multiply_polynomials(&a_mod_q, &b_mod_q);
+
+        // Debug: print output after multiplication
+        if std::env::var("POLY_DEBUG").is_ok() && prime_idx == 0 {
+            print!("[POLY_DEBUG CPU] AFTER mult - product[0:2] prime 0: ");
+            for i in 0..2.min(product_mod_q.len()) {
+                print!("{} ", product_mod_q[i]);
+            }
+            println!();
+        }
 
         // Store results
         for (i, &val) in product_mod_q.iter().enumerate() {
@@ -170,8 +193,51 @@ fn relinearize_degree2(
     let mut c0 = d0.to_vec();
     let mut c1 = d1.to_vec();
 
+    // Debug: print values before relinearization
+    if std::env::var("RELIN_DEBUG").is_ok() {
+        println!("[RELIN_DEBUG CPU] Before relinearization:");
+        print!("  c0[0] across {} primes: ", moduli.len());
+        for j in 0..moduli.len() {
+            print!("{} ", c0[0].values[j]);
+        }
+        println!();
+        print!("  c1[0] across {} primes: ", moduli.len());
+        for j in 0..moduli.len() {
+            print!("{} ", c1[0].values[j]);
+        }
+        println!();
+        print!("  d2[0] across {} primes: ", moduli.len());
+        for j in 0..moduli.len() {
+            print!("{} ", d2[0].values[j]);
+        }
+        println!();
+    }
+
+    // Debug: print d2 values before gadget decomposition
+    if std::env::var("C2_DEBUG").is_ok() {
+        print!("[C2_DEBUG CPU] d2[0] across primes: ");
+        for j in 0..moduli.len() {
+            print!("{} ", d2[0].values[j]);
+        }
+        println!();
+    }
+
     // Decompose d2 using gadget decomposition
     let d2_decomposed = gadget_decompose(d2, base_w, moduli);
+
+    // Debug: print first few values of first digit
+    if std::env::var("MULT_DEBUG").is_ok() && !d2_decomposed.is_empty() {
+        println!("[MULT_DEBUG] CPU gadget decomposition:");
+        println!("  num_digits: {}", d2_decomposed.len());
+        println!("  first digit, first 4 coeffs × {} primes:", n.min(4));
+        for i in 0..n.min(4) {
+            print!("    coeff[{}]: ", i);
+            for j in 0..moduli.len() {
+                print!("{} ", d2_decomposed[0][i].values[j]);
+            }
+            println!();
+        }
+    }
 
     // For each digit in the decomposition
     for (t, d2_digit) in d2_decomposed.iter().enumerate() {
@@ -184,13 +250,77 @@ fn relinearize_degree2(
         // This follows from: evk0[t] - evk1[t]·s = -B^t·s² + noise
         // Therefore: c0 -= d2_digit * evk0[t], c1 += d2_digit * evk1[t]
 
+        if std::env::var("DETAIL_DEBUG").is_ok() && t == 0 {
+            print!("[DETAIL_DEBUG CPU] digit[0] coeff[0] primes: ");
+            for j in 0..moduli.len() {
+                print!("{} ", d2_digit[0].values[j]);
+            }
+            println!();
+            print!("[DETAIL_DEBUG CPU] evk0[0] coeff[0] primes: ");
+            for j in 0..moduli.len() {
+                print!("{} ", evk.evk0[t][0].values[j]);
+            }
+            println!();
+        }
+
         let term0 = multiply_polynomials(d2_digit, &evk.evk0[t], key_ctx, moduli);
         let term1 = multiply_polynomials(d2_digit, &evk.evk1[t], key_ctx, moduli);
+
+        if std::env::var("DETAIL_DEBUG").is_ok() && t == 0 {
+            print!("[DETAIL_DEBUG CPU] term0 coeff[0] primes: ");
+            for j in 0..moduli.len() {
+                print!("{} ", term0[0].values[j]);
+            }
+            println!();
+            print!("[DETAIL_DEBUG CPU] term1 coeff[0] primes: ");
+            for j in 0..moduli.len() {
+                print!("{} ", term1[0].values[j]);
+            }
+            println!();
+            print!("[DETAIL_DEBUG CPU] c0[0] BEFORE subtract: ");
+            for j in 0..moduli.len() {
+                print!("{} ", c0[0].values[j]);
+            }
+            println!();
+            print!("[DETAIL_DEBUG CPU] c1[0] BEFORE add: ");
+            for j in 0..moduli.len() {
+                print!("{} ", c1[0].values[j]);
+            }
+            println!();
+        }
 
         for i in 0..n {
             c0[i] = c0[i].sub(&term0[i]);  // SUBTRACT term0
             c1[i] = c1[i].add(&term1[i]);  // ADD term1
         }
+
+        if std::env::var("DETAIL_DEBUG").is_ok() && t == 0 {
+            print!("[DETAIL_DEBUG CPU] c0[0] AFTER subtract: ");
+            for j in 0..moduli.len() {
+                print!("{} ", c0[0].values[j]);
+            }
+            println!();
+            print!("[DETAIL_DEBUG CPU] c1[0] AFTER add: ");
+            for j in 0..moduli.len() {
+                print!("{} ", c1[0].values[j]);
+            }
+            println!();
+        }
+    }
+
+    // Debug: print values after relinearization
+    if std::env::var("RELIN_DEBUG").is_ok() {
+        println!("[RELIN_DEBUG CPU] After relinearization:");
+        print!("  c0[0] across {} primes: ", moduli.len());
+        for j in 0..moduli.len() {
+            print!("{} ", c0[0].values[j]);
+        }
+        println!();
+        print!("  c1[0] across {} primes: ", moduli.len());
+        for j in 0..moduli.len() {
+            print!("{} ", c1[0].values[j]);
+        }
+        println!();
     }
 
     (c0, c1)
@@ -240,7 +370,22 @@ fn gadget_decompose(
     for i in 0..n {
         // Step 1: CRT reconstruct to get x ∈ [0, Q)
         let residues: Vec<u64> = poly[i].values.clone();
+
+        // Debug: print input residues for first coefficient
+        if std::env::var("CRT_DEBUG").is_ok() && i == 0 {
+            print!("[CRT_DEBUG CPU] coeff[0] input residues: ");
+            for &r in residues.iter() {
+                print!("{} ", r);
+            }
+            println!();
+        }
+
         let x_big = crt_reconstruct_bigint(&residues, moduli);
+
+        // Debug: print reconstructed value for first coefficient
+        if std::env::var("CRT_DEBUG").is_ok() && i == 0 {
+            println!("[CRT_DEBUG CPU] coeff[0] after CRT: {}", x_big);
+        }
 
         // Step 2: Center-lift to x_c ∈ (-Q/2, Q/2]
         let x_centered_big = if x_big > q_half_big {
@@ -248,6 +393,11 @@ fn gadget_decompose(
         } else {
             x_big
         };
+
+        // Debug: print centered value for first coefficient
+        if std::env::var("CRT_DEBUG").is_ok() && i == 0 {
+            println!("[CRT_DEBUG CPU] coeff[0] after centering: {}", x_centered_big);
+        }
 
         // Step 3: Balanced decomposition in Z
         let mut remainder_big = x_centered_big;
@@ -261,6 +411,11 @@ fn gadget_decompose(
                 dt_unbalanced
             };
 
+            // Debug: print first digit for first coefficient
+            if std::env::var("GADGET_DEBUG").is_ok() && i == 0 && t == 0 {
+                println!("[GADGET_DEBUG CPU] coeff[0] digit[0]: dt_big={}", dt_big);
+            }
+
             // Convert dt to residues mod each prime
             for (j, &q) in moduli.iter().enumerate() {
                 let q_big = BigInt::from(q);
@@ -269,6 +424,11 @@ fn gadget_decompose(
                     dt_mod_q_big += &q_big;
                 }
                 digits[t][i].values[j] = dt_mod_q_big.to_u64().unwrap();
+
+                // Debug: print conversion
+                if std::env::var("GADGET_DEBUG").is_ok() && i == 0 && t == 0 {
+                    println!("[GADGET_DEBUG CPU] coeff[0] digit[0] prime[{}]: dt_mod_q={}", j, digits[t][i].values[j]);
+                }
             }
 
             // Update remainder: (x_c - dt) / B (exact division)

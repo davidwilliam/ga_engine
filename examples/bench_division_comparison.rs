@@ -22,9 +22,7 @@ use ga_engine::clifford_fhe_v2::{
 use std::time::Instant;
 
 /// Binary circuit division parameters
-struct BinaryCircuitDivision {
-    bit_width: usize,
-}
+struct BinaryCircuitDivision;
 
 impl BinaryCircuitDivision {
     /// Estimate depth for binary long division circuit
@@ -88,8 +86,6 @@ fn benchmark_newton_raphson_division(
     let ct_denom = ckks_ctx.encrypt(&pt_denom, &pk);
 
     let initial_level = ct_num.level;
-    println!("  Initial level: {}", initial_level);
-    println!("  Iterations: {}", iterations);
 
     // Benchmark division
     let start = Instant::now();
@@ -106,7 +102,6 @@ fn benchmark_newton_raphson_division(
     let elapsed = start.elapsed();
 
     let final_level = ct_result.level;
-    println!("  Final level: {}", final_level);
 
     // Verify correctness
     let pt_result = ckks_ctx.decrypt(&ct_result, &sk);
@@ -114,10 +109,11 @@ fn benchmark_newton_raphson_division(
     let expected = numerator_val / denominator_val;
     let error = (decrypted[0] - expected).abs();
 
-    println!("  Expected: {:.10}", expected);
-    println!("  Got:      {:.10}", decrypted[0]);
-    println!("  Error:    {:.2e}", error);
-    println!("  Time:     {:.2} ms", elapsed.as_secs_f64() * 1000.0);
+    println!("  Expected:  {:.10}", expected);
+    println!("  Got:       {:.10}", decrypted[0]);
+    println!("  Error:     {:.2e}", error);
+    println!("  Time:      {:.2} ms", elapsed.as_secs_f64() * 1000.0);
+    println!("  Depth:     {} → {} ({} levels consumed)", initial_level, final_level, initial_level - final_level);
 
     // Calculate metrics
     // Each iteration: 2 multiplications (a·x_n, x_n·(2-a·x_n))
@@ -161,7 +157,7 @@ fn print_comparison_table(
     println!("├──────────────┼──────────────┼─────────────┼─────────────┼──────────────┤");
 
     for &bit_width in bit_widths {
-        let bc = BinaryCircuitDivision { bit_width };
+        let bc = BinaryCircuitDivision;
         let bc_depth = bc.estimated_depth(bit_width);
         let bc_ops = bc.estimated_operations(bit_width);
 
@@ -205,7 +201,7 @@ fn print_comparison_table(
 fn main() {
     println!("╔════════════════════════════════════════════════════════════════════════╗");
     println!("║     Homomorphic Division Benchmark: Newton-Raphson vs Binary Circuits ║");
-    println!("╚════════════════════════════════════════════════════════════════════════╝");
+    println!("╚════════════════════════════════════════════════════════════════════════╝\n");
 
     // Test cases
     let test_cases = vec![

@@ -69,11 +69,11 @@ pub struct MetalRelinKeys {
     /// Metal device (shared)
     device: Arc<MetalDevice>,
 
-    /// Relinearization keys in coefficient domain
-    /// (rlk0[], rlk1[]) where each array has num_digits elements
-    /// Each element is Vec<u64> in flat RNS layout
-    rlk0_coeff: Vec<Vec<u64>>,
-    rlk1_coeff: Vec<Vec<u64>>,
+    /// Relinearization keys in coefficient domain (per level)
+    /// Vec indexed by level, each containing num_digits elements
+    /// Each element is Vec<u64> in flat RNS layout [n × num_primes_for_level]
+    rlk0_coeff: Vec<Vec<Vec<u64>>>,
+    rlk1_coeff: Vec<Vec<Vec<u64>>>,
 
     /// Pre-computed NTT-transformed relinearization keys (per level)
     /// Vec indexed by level, containing (rlk0_ntt[], rlk1_ntt[])
@@ -153,7 +153,7 @@ impl MetalRelinKeys {
             // Sample random polynomial a_i
             let a_i = Self::sample_uniform_poly(n, moduli);
 
-            // Compute b_i = -a_i·s + e_i + B^digit_idx·s²
+            // Compute b_i = -a_i·s + e_i - B^digit_idx·s² (matches CPU EVK generation)
             let b_i = Self::compute_rlk_component(
                 &a_i,
                 sk,
@@ -164,6 +164,20 @@ impl MetalRelinKeys {
                 params.error_std,
             )?;
 
+            // Debug: print first coefficient of first digit
+            if std::env::var("EVK_GEN_DEBUG").is_ok() && digit_idx == 0 {
+                print!("[EVK_GEN_DEBUG] digit[0] b_i[coeff=0]: ");
+                for prime_idx in 0..num_primes {
+                    print!("{} ", b_i[0 * num_primes + prime_idx]);
+                }
+                println!();
+                print!("[EVK_GEN_DEBUG] digit[0] a_i[coeff=0]: ");
+                for prime_idx in 0..num_primes {
+                    print!("{} ", a_i[0 * num_primes + prime_idx]);
+                }
+                println!();
+            }
+
             rlk0_coeff.push(b_i);
             rlk1_coeff.push(a_i);
 
@@ -172,41 +186,81 @@ impl MetalRelinKeys {
             }
         }
 
-        println!("\nPrecomputing NTT-transformed keys for all levels...");
+        println!("\nGenerating level-specific keys and NTT transforms...");
 
-        // Precompute NTT transforms for each level
+        // Generate both coefficient and NTT keys for each level
+        let mut rlk0_coeff_levels = Vec::with_capacity(max_level + 1);
+        let mut rlk1_coeff_levels = Vec::with_capacity(max_level + 1);
         let mut rlk0_ntt = Vec::with_capacity(max_level + 1);
         let mut rlk1_ntt = Vec::with_capacity(max_level + 1);
 
         for level in 0..=max_level {
             let num_primes_level = level + 1;
+            let mut rlk0_coeff_level = Vec::with_capacity(num_digits);
+            let mut rlk1_coeff_level = Vec::with_capacity(num_digits);
             let mut rlk0_ntt_level = Vec::with_capacity(num_digits);
             let mut rlk1_ntt_level = Vec::with_capacity(num_digits);
 
             for digit_idx in 0..num_digits {
-                // Extract relevant primes for this level
-                let rlk0_digit_ntt = Self::forward_ntt_flat(
+                // Debug: print original values before extraction
+                if std::env::var("EVK_EXTRACT_DEBUG").is_ok() && level == 2 && digit_idx == 0 {
+                    print!("[EVK_EXTRACT_DEBUG] level={}, digit={}, BEFORE extract rlk0[coeff=0]: ", level, digit_idx);
+                    for prime_idx in 0..num_primes.min(3) {
+                        print!("{} ", rlk0_coeff[digit_idx][0 * num_primes + prime_idx]);
+                    }
+                    println!();
+                }
+
+                // Extract coefficient keys for this level (first num_primes_level primes)
+                let rlk0_coeff_digit = Self::extract_primes_flat(
                     &rlk0_coeff[digit_idx],
+                    n,
+                    num_primes,
+                    num_primes_level,
+                );
+                let rlk1_coeff_digit = Self::extract_primes_flat(
+                    &rlk1_coeff[digit_idx],
+                    n,
+                    num_primes,
+                    num_primes_level,
+                );
+
+                // Debug: print extracted values
+                if std::env::var("EVK_EXTRACT_DEBUG").is_ok() && level == 2 && digit_idx == 0 {
+                    print!("[EVK_EXTRACT_DEBUG] level={}, digit={}, AFTER extract rlk0[coeff=0]: ", level, digit_idx);
+                    for prime_idx in 0..num_primes_level.min(3) {
+                        print!("{} ", rlk0_coeff_digit[0 * num_primes_level + prime_idx]);
+                    }
+                    println!();
+                }
+
+                // Compute NTT transform for this level (use level-specific coefficients)
+                let rlk0_digit_ntt = Self::forward_ntt_flat(
+                    &rlk0_coeff_digit,
                     n,
                     num_primes_level,
                     ntt_contexts,
                 )?;
                 let rlk1_digit_ntt = Self::forward_ntt_flat(
-                    &rlk1_coeff[digit_idx],
+                    &rlk1_coeff_digit,
                     n,
                     num_primes_level,
                     ntt_contexts,
                 )?;
 
+                rlk0_coeff_level.push(rlk0_coeff_digit);
+                rlk1_coeff_level.push(rlk1_coeff_digit);
                 rlk0_ntt_level.push(rlk0_digit_ntt);
                 rlk1_ntt_level.push(rlk1_digit_ntt);
             }
 
+            rlk0_coeff_levels.push(rlk0_coeff_level);
+            rlk1_coeff_levels.push(rlk1_coeff_level);
             rlk0_ntt.push(rlk0_ntt_level);
             rlk1_ntt.push(rlk1_ntt_level);
 
             if (level + 1) % 10 == 0 || level == max_level {
-                println!("  Transformed {}/{} levels", level + 1, max_level + 1);
+                println!("  Processed {}/{} levels", level + 1, max_level + 1);
             }
         }
 
@@ -216,8 +270,8 @@ impl MetalRelinKeys {
 
         Ok(Self {
             device,
-            rlk0_coeff,
-            rlk1_coeff,
+            rlk0_coeff: rlk0_coeff_levels,
+            rlk1_coeff: rlk1_coeff_levels,
             rlk0_ntt,
             rlk1_ntt,
             base_w,
@@ -234,6 +288,33 @@ impl MetalRelinKeys {
             return Err(format!("Level {} exceeds max level {}", level, self.max_level));
         }
         Ok((&self.rlk0_ntt[level], &self.rlk1_ntt[level]))
+    }
+
+    /// Get coefficient-form relinearization keys at specified level
+    ///
+    /// Returns keys with exactly the right number of primes for the level.
+    /// Each key is [n × (level+1)] in flat RNS layout.
+    pub fn get_coeff_keys(&self, level: usize) -> Result<(&[Vec<u64>], &[Vec<u64>]), String> {
+        if level > self.max_level {
+            return Err(format!("Level {} exceeds max level {}", level, self.max_level));
+        }
+
+        // Debug: print EVK values being returned
+        if std::env::var("EVK_GET_DEBUG").is_ok() && level == 2 {
+            println!("[EVK_GET_DEBUG] get_coeff_keys(level={})", level);
+            println!("[EVK_GET_DEBUG] rlk0_coeff[{}].len() = {}", level, self.rlk0_coeff[level].len());
+            if !self.rlk0_coeff[level].is_empty() {
+                print!("[EVK_GET_DEBUG] rlk0_coeff[{}][0][coeff=0] primes: ", level);
+                let num_primes = self.rlk0_coeff[level][0].len() / self.n;
+                for prime_idx in 0..num_primes.min(3) {
+                    print!("{} ", self.rlk0_coeff[level][0][0 * num_primes + prime_idx]);
+                }
+                println!();
+            }
+        }
+
+        // Coefficient keys are now stored per-level with correct prime count
+        Ok((&self.rlk0_coeff[level], &self.rlk1_coeff[level]))
     }
 
     /// Get gadget decomposition parameters
@@ -302,10 +383,10 @@ impl MetalRelinKeys {
 
         for coeff_idx in 0..n {
             for (prime_idx, &q) in moduli.iter().enumerate() {
-                // -a·s
+                // a·s (POSITIVE, matches CPU line 498: a_t_times_s)
                 let a_val = a[coeff_idx * num_primes + prime_idx];
                 let s_val = sk.coeffs[coeff_idx].values[prime_idx];
-                let neg_as = q - ((a_val as u128 * s_val as u128) % q as u128) as u64;
+                let a_times_s = ((a_val as u128 * s_val as u128) % q as u128) as u64;
 
                 // e (error)
                 let e_float: f64 = normal.sample(&mut rng);
@@ -316,13 +397,14 @@ impl MetalRelinKeys {
                     if abs_e == 0 { 0 } else { q - abs_e }
                 };
 
-                // power·s² mod q
+                // -power·s² mod q (negative, matches CPU line 499: neg_bt_s2)
                 let s2_val = s_squared[coeff_idx].values[prime_idx];
                 let power_mod_q = (power % q as u128) as u64;
-                let power_s2 = ((power_mod_q as u128 * s2_val as u128) % q as u128) as u64;
+                let power_s2_pos = ((power_mod_q as u128 * s2_val as u128) % q as u128) as u64;
+                let neg_power_s2 = if power_s2_pos == 0 { 0 } else { q - power_s2_pos };
 
-                // b = -a·s + e + power·s²
-                let sum = (neg_as as u128 + e as u128 + power_s2 as u128) % q as u128;
+                // b = -power·s² + a·s + e (matches CPU line 496: evk0[t] = -B^t*s^2 + a_t*s + e_t)
+                let sum = (neg_power_s2 as u128 + a_times_s as u128 + e as u128) % q as u128;
                 b[coeff_idx * num_primes + prime_idx] = sum as u64;
             }
         }
@@ -330,7 +412,33 @@ impl MetalRelinKeys {
         Ok(b)
     }
 
+    /// Extract first `num_primes_out` primes from flat RNS polynomial
+    ///
+    /// Input: flat array [n × num_primes_in]
+    /// Output: flat array [n × num_primes_out]
+    fn extract_primes_flat(
+        poly_flat: &[u64],
+        n: usize,
+        num_primes_in: usize,
+        num_primes_out: usize,
+    ) -> Vec<u64> {
+        let mut result = vec![0u64; n * num_primes_out];
+
+        for coeff_idx in 0..n {
+            for prime_idx in 0..num_primes_out {
+                let src_idx = coeff_idx * num_primes_in + prime_idx;
+                let dst_idx = coeff_idx * num_primes_out + prime_idx;
+                result[dst_idx] = poly_flat[src_idx];
+            }
+        }
+
+        result
+    }
+
     /// Forward NTT transform on flat RNS polynomial (CPU-side, for precomputation)
+    ///
+    /// **State-of-the-art optimization**: Pre-applies twist for negacyclic convolution, storing
+    /// EVK in "twisted-NTT" domain to eliminate runtime twist operations during relinearization.
     fn forward_ntt_flat(
         poly_flat: &[u64],
         n: usize,
@@ -341,6 +449,7 @@ impl MetalRelinKeys {
 
         for prime_idx in 0..num_primes_level {
             let ntt_ctx = &ntt_contexts[prime_idx];
+            let q = ntt_ctx.q();
 
             // Extract coefficients for this prime
             let mut poly_prime = vec![0u64; n];
@@ -348,10 +457,10 @@ impl MetalRelinKeys {
                 poly_prime[coeff_idx] = poly_flat[coeff_idx * poly_flat.len() / n + prime_idx];
             }
 
-            // Forward NTT (CPU)
+            // Forward NTT (for later asymmetric multiplication optimization)
             ntt_ctx.forward(&mut poly_prime)?;
 
-            // Store back to flat layout
+            // Store in flat layout (now in twisted-NTT domain)
             for coeff_idx in 0..n {
                 result[coeff_idx * num_primes_level + prime_idx] = poly_prime[coeff_idx];
             }

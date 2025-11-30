@@ -46,7 +46,7 @@ use super::rotor_nd::RotorND;
 use std::fmt;
 
 /// GA-accelerated LLL using rotor-based orthogonalization
-pub struct GA_LLL {
+pub struct GaLll {
     /// Original basis vectors (modified during reduction)
     basis: Vec<Vec<f64>>,
 
@@ -73,12 +73,12 @@ pub struct GA_LLL {
     rotors: Vec<RotorND>,
 
     /// Statistics
-    stats: GA_LLL_Stats,
+    stats: GaLllStats,
 }
 
 /// Statistics for GA-LLL (extends LLL stats with rotor-specific metrics)
 #[derive(Debug, Clone, Default)]
-pub struct GA_LLL_Stats {
+pub struct GaLllStats {
     /// Standard LLL statistics
     pub lll_stats: LLLStats,
 
@@ -95,7 +95,7 @@ pub struct GA_LLL_Stats {
     pub rotor_operations: usize,
 }
 
-impl GA_LLL {
+impl GaLll {
     /// Create new GA-LLL reducer
     ///
     /// # Arguments
@@ -134,7 +134,7 @@ impl GA_LLL {
             mu,
             b_star_norms_sq,
             rotors,
-            stats: GA_LLL_Stats::default(),
+            stats: GaLllStats::default(),
         };
 
         // Initial GSO computation using rotors
@@ -146,7 +146,7 @@ impl GA_LLL {
 
     /// Run LLL reduction algorithm (same structure as baseline)
     pub fn reduce(&mut self) {
-        let mut k = 1;
+        let mut k: usize = 1;
 
         while k < self.num_vectors {
             // Size reduce b_k with respect to b_0, ..., b_{k-1}
@@ -279,7 +279,7 @@ impl GA_LLL {
     }
 
     /// Get statistics
-    pub fn get_stats(&self) -> &GA_LLL_Stats {
+    pub fn get_stats(&self) -> &GaLllStats {
         &self.stats
     }
 
@@ -305,7 +305,7 @@ impl GA_LLL {
         assert_eq!(self.basis.len(), expected.len());
         assert_eq!(self.basis[0].len(), expected[0].len());
 
-        let mut sum_sq = 0.0;
+        let mut sum_sq: f64 = 0.0;
         for i in 0..self.basis.len() {
             for j in 0..self.basis[0].len() {
                 let diff = self.basis[i][j] - expected[i][j];
@@ -335,7 +335,7 @@ impl GA_LLL {
     }
 }
 
-impl fmt::Display for GA_LLL {
+impl fmt::Display for GaLll {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "GA-LLL Reducer (Rotor-based)")?;
         writeln!(f, "  Dimension: {}", self.dimension)?;
@@ -390,7 +390,7 @@ mod tests {
             vec![5.0, 13.0],
         ];
 
-        let mut ga_lll = GA_LLL::new(basis, 0.99);
+        let mut ga_lll = GaLll::new(basis, 0.99);
         ga_lll.reduce();
 
         let reduced = ga_lll.get_basis();
@@ -413,7 +413,7 @@ mod tests {
             vec![0.0, 0.0, 1.0],
         ];
 
-        let mut ga_lll = GA_LLL::new(basis.clone(), 0.99);
+        let mut ga_lll = GaLll::new(basis.clone(), 0.99);
         ga_lll.reduce();
 
         let reduced = ga_lll.get_basis();
@@ -433,7 +433,7 @@ mod tests {
             vec![5.0, 13.0],
         ];
 
-        let mut ga_lll = GA_LLL::new(basis, 0.99);
+        let mut ga_lll = GaLll::new(basis, 0.99);
         ga_lll.reduce();
 
         let hf = ga_lll.hermite_factor();
@@ -448,7 +448,7 @@ mod tests {
             vec![0.0, 0.0, 1.0],
         ];
 
-        let ga_lll = GA_LLL::new(basis, 0.99);
+        let ga_lll = GaLll::new(basis, 0.99);
         let defect = ga_lll.orthogonality_defect();
 
         // Perfect orthogonal basis should have defect ≈ 1.0
@@ -463,7 +463,7 @@ mod tests {
             vec![1.0, 2.0, 10.0],
         ];
 
-        let mut ga_lll = GA_LLL::new(basis, 0.99);
+        let mut ga_lll = GaLll::new(basis, 0.99);
         ga_lll.reduce();
 
         let stats = ga_lll.get_stats();

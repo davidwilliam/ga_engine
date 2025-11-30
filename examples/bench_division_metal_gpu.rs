@@ -20,7 +20,6 @@ use ga_engine::clifford_fhe_v2::{
             ckks::MetalCkksContext,
             device::MetalDevice,
             inversion::scalar_division_metal,
-            ntt::MetalNttContext,
             relin_keys::MetalRelinKeys,
         },
     },
@@ -46,12 +45,13 @@ fn main() -> Result<(), String> {
     println!("  ✅ Metal device initialized ({:.2}ms)", device_start.elapsed().as_secs_f64() * 1000.0);
     println!();
 
-    // Setup FHE parameters
+    // Setup FHE parameters (use N=4096 for enough depth)
     println!("Step 2: Setting up FHE parameters...");
-    let params = CliffordFHEParams::new_test_ntt_1024();
+    let params = CliffordFHEParams::new_test_ntt_4096();  // 7 primes = max level 6
     println!("  Ring dimension (N): {}", params.n);
-    println!("  Number of primes: {}", params.moduli.len());
+    println!("  Number of primes: {} (max level: {})", params.moduli.len(), params.moduli.len() - 1);
     println!("  Scale (Δ): 2^{}", (params.scale.log2() as u32));
+    println!("  Depth required: 2 NR iterations (4 levels) + 1 final mult = 5 levels");
     println!();
 
     // Key generation
@@ -62,40 +62,32 @@ fn main() -> Result<(), String> {
     println!("  ✅ Key generation time: {:.2}ms", key_start.elapsed().as_secs_f64() * 1000.0);
     println!();
 
-    // Create Metal CKKS context
+    // Create Metal CKKS context (includes NTT contexts)
     println!("Step 4: Initializing Metal CKKS context...");
     let ctx_start = Instant::now();
     let ctx = MetalCkksContext::new(params.clone())?;
     println!("  ✅ Metal CKKS context ready: {:.2}ms", ctx_start.elapsed().as_secs_f64() * 1000.0);
     println!();
 
-    // Create NTT contexts
-    println!("Step 5: Creating NTT contexts...");
-    let ntt_start = Instant::now();
-    let ntt_contexts: Vec<MetalNttContext> = params.moduli.iter()
-        .map(|&q| MetalNttContext::new(params.n, q, device.clone()).unwrap())
-        .collect();
-    println!("  ✅ NTT contexts ready: {:.2}ms", ntt_start.elapsed().as_secs_f64() * 1000.0);
-    println!();
-
     // Generate relinearization keys for Metal
-    println!("Step 6: Generating Metal relinearization keys...");
+    println!("Step 5: Generating Metal relinearization keys...");
     let relin_start = Instant::now();
     let relin_keys = MetalRelinKeys::generate(
         device.clone(),
         &sk,
         &params,
-        &ntt_contexts,
+        ctx.ntt_contexts(),  // Use NTT contexts from CKKS context
         16, // base_w
     )?;
     println!("  ✅ Relinearization keys ready: {:.2}ms", relin_start.elapsed().as_secs_f64() * 1000.0);
     println!();
 
     // Test cases: (numerator, denominator, iterations, expected_accuracy)
+    // Note: Using 2 iterations to fit within depth budget (2 iter × 2 levels + 1 final = 5 levels)
     let test_cases = vec![
-        (100.0, 7.0, 3, "10^-6"),
-        (1000.0, 13.0, 3, "10^-6"),
-        (5000.0, 17.0, 4, "10^-9"),
+        (100.0, 7.0, 2, "10^-3"),
+        (1000.0, 13.0, 2, "10^-3"),
+        (5000.0, 17.0, 2, "10^-3"),
     ];
 
     println!("╔════════════════════════════════════════════════════════════════════════╗");

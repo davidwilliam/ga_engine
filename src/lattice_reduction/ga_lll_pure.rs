@@ -44,7 +44,7 @@ use super::rotor_nd::RotorND;
 use std::fmt;
 
 /// Pure rotor-based LLL (no standard arithmetic)
-pub struct GA_LLL_Pure {
+pub struct GaLllPure {
     /// Original basis vectors (modified during reduction)
     basis: Vec<Vec<f64>>,
 
@@ -71,12 +71,12 @@ pub struct GA_LLL_Pure {
     rotors: Vec<RotorND>,
 
     /// Statistics
-    stats: GA_LLL_Pure_Stats,
+    stats: GaLllPureStats,
 }
 
 /// Statistics for pure rotor LLL
 #[derive(Debug, Clone, Default)]
-pub struct GA_LLL_Pure_Stats {
+pub struct GaLllPureStats {
     /// Standard LLL statistics
     pub lll_stats: LLLStats,
 
@@ -93,7 +93,7 @@ pub struct GA_LLL_Pure_Stats {
     pub rotor_operations: usize,
 }
 
-impl GA_LLL_Pure {
+impl GaLllPure {
     /// Create new pure rotor LLL reducer
     pub fn new(basis: Vec<Vec<f64>>, delta: f64) -> Self {
         assert!(!basis.is_empty(), "Basis must be non-empty");
@@ -120,7 +120,7 @@ impl GA_LLL_Pure {
             mu,
             b_star_norms_sq,
             rotors,
-            stats: GA_LLL_Pure_Stats::default(),
+            stats: GaLllPureStats::default(),
         };
 
         // Initial GSO computation using PURE rotors
@@ -132,7 +132,7 @@ impl GA_LLL_Pure {
 
     /// Run LLL reduction
     pub fn reduce(&mut self) {
-        let mut k = 1;
+        let mut k: usize = 1;
 
         while k < self.num_vectors {
             // Size reduce b_k with respect to b_0, ..., b_{k-1}
@@ -283,7 +283,7 @@ impl GA_LLL_Pure {
     }
 
     /// Get statistics
-    pub fn get_stats(&self) -> &GA_LLL_Pure_Stats {
+    pub fn get_stats(&self) -> &GaLllPureStats {
         &self.stats
     }
 
@@ -312,7 +312,7 @@ impl GA_LLL_Pure {
     }
 }
 
-impl fmt::Display for GA_LLL_Pure {
+impl fmt::Display for GaLllPure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "GA-LLL Pure Rotor (v2)")?;
         writeln!(f, "  Dimension: {}", self.dimension)?;
@@ -365,7 +365,7 @@ mod tests {
             vec![5.0, 13.0],
         ];
 
-        let mut lll = GA_LLL_Pure::new(basis, 0.99);
+        let mut lll = GaLllPure::new(basis, 0.99);
         lll.reduce();
 
         let reduced = lll.get_basis();
@@ -385,7 +385,7 @@ mod tests {
             vec![0.0, 0.0, 1.0],
         ];
 
-        let mut lll = GA_LLL_Pure::new(basis.clone(), 0.99);
+        let mut lll = GaLllPure::new(basis.clone(), 0.99);
         lll.reduce();
 
         let reduced = lll.get_basis();
@@ -405,7 +405,7 @@ mod tests {
             vec![5.0, 13.0],
         ];
 
-        let mut lll = GA_LLL_Pure::new(basis, 0.99);
+        let mut lll = GaLllPure::new(basis, 0.99);
         lll.reduce();
 
         let hf = lll.hermite_factor();
@@ -420,7 +420,7 @@ mod tests {
             vec![0.0, 0.0, 1.0],
         ];
 
-        let lll = GA_LLL_Pure::new(basis, 0.99);
+        let lll = GaLllPure::new(basis, 0.99);
         let defect = lll.orthogonality_defect();
 
         // Perfect orthogonal basis
@@ -435,7 +435,7 @@ mod tests {
             vec![1.0, 2.0, 10.0],
         ];
 
-        let mut lll = GA_LLL_Pure::new(basis, 0.99);
+        let mut lll = GaLllPure::new(basis, 0.99);
         lll.reduce();
 
         let stats = lll.get_stats();

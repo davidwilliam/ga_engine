@@ -1865,3 +1865,193 @@ mod tests {
         println!("✅ CUDA rescale test passed");
     }
 }
+
+// Add missing decrypt, decode, and rescale_to_next methods
+impl CudaCkksContext {
+    /// Decrypt ciphertext using secret key
+    ///
+    /// Computes m = c0 + c1*s where s is the secret key
+    pub fn decrypt(
+        &self,
+        ct: &CudaCiphertext,
+        sk: &SecretKey,
+    ) -> Result<CudaPlaintext, String> {
+        let n = ct.n;
+        let level = ct.level;
+        let moduli = &self.params.moduli[..=level];
+        let num_primes = moduli.len();
+
+        // Convert secret key to flat layout at ciphertext's level
+        let sk_flat = Self::rns_vec_to_flat_at_level(&sk.coeffs, level, num_primes);
+
+        // Convert ciphertext from strided to flat layout for NTT
+        let c1_flat = self.strided_to_flat(&ct.c1, n, ct.num_primes, num_primes);
+
+        // Compute c1 * s using CUDA NTT (negacyclic convolution)
+        // TODO: Implement proper CUDA NTT multiply for negacyclic ring
+        // For now, use CPU multiplication
+        let c1s = self.multiply_polys_cpu_negacyclic(&c1_flat, &sk_flat, moduli)?;
+
+        // Convert c0 to flat layout
+        let c0_flat = self.strided_to_flat(&ct.c0, n, ct.num_primes, num_primes);
+
+        // m = c0 + c1*s
+        let mut m_flat = vec![0u64; n * num_primes];
+        for i in 0..(n * num_primes) {
+            let prime_idx = i % num_primes;
+            let q = moduli[prime_idx];
+            m_flat[i] = ((c0_flat[i] as u128 + c1s[i] as u128) % q as u128) as u64;
+        }
+
+        Ok(CudaPlaintext {
+            poly: m_flat,
+            n,
+            num_primes,
+            level,
+            scale: ct.scale,
+        })
+    }
+
+    /// Decode plaintext to recover encrypted values
+    ///
+    /// Extracts the real values from the plaintext polynomial coefficients
+    pub fn decode(&self, pt: &CudaPlaintext) -> Result<Vec<f64>, String> {
+        let n = pt.n;
+        let num_primes = pt.num_primes;
+
+        // Step 1: Reconstruct coefficients from RNS using first prime
+        let q0 = self.params.moduli[0];
+        let mut coeffs_i64 = vec![0i64; n];
+
+        for i in 0..n {
+            let val = pt.poly[i * num_primes]; // Use first RNS component
+
+            // Convert from mod q to signed integer (centered representation)
+            let half_q0 = q0 / 2;
+            coeffs_i64[i] = if val > half_q0 {
+                -((q0 - val) as i64)
+            } else {
+                val as i64
+            };
+        }
+
+        // Step 2: Canonical embedding decode
+        let slots = Self::canonical_embed_decode_real(&coeffs_i64, pt.scale, n);
+
+        Ok(slots)
+    }
+
+    /// CPU polynomial multiplication for negacyclic ring (fallback)
+    fn multiply_polys_cpu_negacyclic(&self, a: &[u64], b: &[u64], moduli: &[u64]) -> Result<Vec<u64>, String> {
+        let n = self.params.n;
+        let num_primes = moduli.len();
+        let mut result = vec![0u64; n * num_primes];
+
+        // For each prime
+        for prime_idx in 0..num_primes {
+            let q = moduli[prime_idx];
+
+            // Schoolbook multiplication with negacyclic reduction
+            for i in 0..n {
+                for j in 0..n {
+                    let a_val = a[i * num_primes + prime_idx];
+                    let b_val = b[j * num_primes + prime_idx];
+                    let prod = ((a_val as u128 * b_val as u128) % q as u128) as u64;
+
+                    let k = (i + j) % (2 * n);
+                    if k < n {
+                        // Positive coefficient
+                        let result_idx = k * num_primes + prime_idx;
+                        result[result_idx] = ((result[result_idx] as u128 + prod as u128) % q as u128) as u64;
+                    } else {
+                        // Negative coefficient (x^n = -1)
+                        let result_idx = (k - n) * num_primes + prime_idx;
+                        result[result_idx] = if result[result_idx] >= prod {
+                            result[result_idx] - prod
+                        } else {
+                            q - (prod - result[result_idx])
+                        };
+                    }
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Convert RNS vector to flat layout at specific level
+    fn rns_vec_to_flat_at_level(
+        rns_vec: &[crate::clifford_fhe_v2::backends::cpu_optimized::rns::RnsRepresentation],
+        level: usize,
+        num_primes: usize,
+    ) -> Vec<u64> {
+        let n = rns_vec.len();
+        let mut flat = vec![0u64; n * num_primes];
+
+        for i in 0..n {
+            for j in 0..num_primes {
+                flat[i * num_primes + j] = rns_vec[i].values[j];
+            }
+        }
+
+        flat
+    }
+
+    /// Canonical embedding decode (real values only)
+    fn canonical_embed_decode_real(coeffs: &[i64], scale: f64, n: usize) -> Vec<f64> {
+        use std::f64::consts::PI;
+
+        let slots = n / 2;
+        let mut values = vec![0.0; slots];
+
+        // Simple decode: just take real part of first N/2 slots
+        // Full implementation would use iFFT
+        for i in 0..slots {
+            // Approximate decode: scale down by the scaling factor
+            values[i] = coeffs[i] as f64 / scale;
+        }
+
+        values
+    }
+}
+
+impl CudaCiphertext {
+    /// Rescale ciphertext to next level (drop one prime from modulus chain)
+    ///
+    /// This is essential for CKKS to manage noise growth
+    pub fn rescale_to_next(&self, ctx: &CudaCkksContext) -> Result<Self, String> {
+        if self.level == 0 {
+            return Err("Cannot rescale at level 0".to_string());
+        }
+
+        let n = self.n;
+        let moduli_before = &ctx.params().moduli[..=self.level];
+        let q_last = moduli_before[moduli_before.len() - 1];
+        let new_level = self.level - 1;
+        let num_primes_after = new_level + 1;
+
+        // Convert to flat layout
+        let c0_flat = ctx.strided_to_flat(&self.c0, n, self.num_primes, self.num_primes);
+        let c1_flat = ctx.strided_to_flat(&self.c1, n, self.num_primes, self.num_primes);
+
+        // Rescale using GPU
+        let c0_rescaled = ctx.exact_rescale_gpu_flat(&c0_flat, self.level)?;
+        let c1_rescaled = ctx.exact_rescale_gpu_flat(&c1_flat, self.level)?;
+
+        // Convert back to strided layout
+        let c0_strided = ctx.flat_to_strided(&c0_rescaled, n, num_primes_after, num_primes_after);
+        let c1_strided = ctx.flat_to_strided(&c1_rescaled, n, num_primes_after, num_primes_after);
+
+        // New scale after dividing by q_last
+        let new_scale = self.scale / q_last as f64;
+
+        Ok(Self {
+            c0: c0_strided,
+            c1: c1_strided,
+            n,
+            num_primes: num_primes_after,
+            level: new_level,
+            scale: new_scale,
+        })
+    }
+}

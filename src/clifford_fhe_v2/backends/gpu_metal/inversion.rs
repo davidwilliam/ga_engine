@@ -123,11 +123,30 @@ pub fn newton_raphson_inverse_metal(
     let mut two_vec = vec![0.0; num_slots];
     two_vec[0] = 2.0;
 
+    // Create a working copy of ct that we'll rescale to match ct_xn's level
+    let mut ct_a = ct.clone();
+
     for iter_idx in 0..iterations {
         println!("  Newton-Raphson iteration {}/{}...", iter_idx + 1, iterations);
 
-        // Step 1: Compute a · x_n (ct × ct_xn)
-        let ct_axn = multiply_ciphertexts_metal(ct, &ct_xn, relin_keys, ctx)?;
+        // Match levels if needed: rescale ct_a to ct_xn's level
+        while ct_a.level > ct_xn.level {
+            println!("    Rescaling ct_a from level {} to {}", ct_a.level, ct_a.level - 1);
+            let rescaled_c0 = ctx.exact_rescale_gpu(&ct_a.c0, ct_a.level)?;
+            let rescaled_c1 = ctx.exact_rescale_gpu(&ct_a.c1, ct_a.level)?;
+            let new_scale = ct_a.scale / params.moduli[ct_a.level] as f64;
+            ct_a = MetalCiphertext {
+                c0: rescaled_c0,
+                c1: rescaled_c1,
+                n: ct_a.n,
+                num_primes: ct_a.level,  // level drops by 1
+                level: ct_a.level - 1,
+                scale: new_scale,
+            };
+        }
+
+        // Step 1: Compute a · x_n (ct_a × ct_xn, both at same level now)
+        let ct_axn = multiply_ciphertexts_metal(&ct_a, &ct_xn, relin_keys, ctx)?;
         println!("    Computed a·x_n (level {})", ct_axn.level);
 
         // Step 2: Create trivial ciphertext for constant 2 at ct_axn's level
@@ -139,7 +158,23 @@ pub fn newton_raphson_inverse_metal(
         let ct_two_minus_axn = subtract_ciphertexts_metal(&ct_two, &ct_axn, ctx)?;
         println!("    Computed 2 - a·x_n (level {})", ct_two_minus_axn.level);
 
-        // Step 4: Compute x_{n+1} = x_n · (2 - a·x_n)
+        // Step 4: Match ct_xn level with ct_two_minus_axn before multiplication
+        while ct_xn.level > ct_two_minus_axn.level {
+            println!("    Rescaling ct_xn from level {} to {}", ct_xn.level, ct_xn.level - 1);
+            let rescaled_c0 = ctx.exact_rescale_gpu(&ct_xn.c0, ct_xn.level)?;
+            let rescaled_c1 = ctx.exact_rescale_gpu(&ct_xn.c1, ct_xn.level)?;
+            let new_scale = ct_xn.scale / params.moduli[ct_xn.level] as f64;
+            ct_xn = MetalCiphertext {
+                c0: rescaled_c0,
+                c1: rescaled_c1,
+                n: ct_xn.n,
+                num_primes: ct_xn.level,
+                level: ct_xn.level - 1,
+                scale: new_scale,
+            };
+        }
+
+        // Step 5: Compute x_{n+1} = x_n · (2 - a·x_n)
         ct_xn = multiply_ciphertexts_metal(&ct_xn, &ct_two_minus_axn, relin_keys, ctx)?;
         println!("    ✓ Iteration complete (level {})\n", ct_xn.level);
     }
@@ -211,9 +246,27 @@ pub fn scalar_division_metal(
         ctx,
     )?;
 
-    // Step 2: Multiply numerator by 1/denominator to get numerator/denominator
-    println!("Step 2: Multiplying numerator by (1/denominator)...");
-    let ct_quotient = multiply_ciphertexts_metal(numerator, &ct_inv, relin_keys, ctx)?;
+    // Step 2: Match numerator level with inverse before multiplication
+    let mut ct_num = numerator.clone();
+    while ct_num.level > ct_inv.level {
+        println!("Step 2: Rescaling numerator from level {} to {}", ct_num.level, ct_num.level - 1);
+        let params = &ctx.params;
+        let rescaled_c0 = ctx.exact_rescale_gpu(&ct_num.c0, ct_num.level)?;
+        let rescaled_c1 = ctx.exact_rescale_gpu(&ct_num.c1, ct_num.level)?;
+        let new_scale = ct_num.scale / params.moduli[ct_num.level] as f64;
+        ct_num = MetalCiphertext {
+            c0: rescaled_c0,
+            c1: rescaled_c1,
+            n: ct_num.n,
+            num_primes: ct_num.level,
+            level: ct_num.level - 1,
+            scale: new_scale,
+        };
+    }
+
+    // Step 3: Multiply numerator by 1/denominator to get numerator/denominator
+    println!("Step 3: Multiplying numerator by (1/denominator)...");
+    let ct_quotient = multiply_ciphertexts_metal(&ct_num, &ct_inv, relin_keys, ctx)?;
 
     println!("\n✅ Division complete!");
     println!("   Final level: {}", ct_quotient.level);
@@ -267,7 +320,7 @@ fn create_trivial_ciphertext_metal(
 ///
 /// # Returns
 /// Difference ciphertext ct1 - ct2
-fn subtract_ciphertexts_metal(
+pub fn subtract_ciphertexts_metal(
     ct1: &MetalCiphertext,
     ct2: &MetalCiphertext,
     ctx: &MetalCkksContext,
@@ -340,11 +393,17 @@ impl MetalPlaintext {
         let mut coeffs = vec![0u64; n * num_primes];
         for (coeff_idx, &val) in encoded_ints.iter().enumerate().take(n) {
             for (prime_idx, &q) in params.moduli.iter().enumerate().take(num_primes) {
+                // Convert signed coefficient to unsigned mod q
                 let val_mod_q = if val >= 0 {
                     (val as u64) % q
                 } else {
                     let abs_val = (-val) as u64;
-                    q - (abs_val % q)
+                    let remainder = abs_val % q;
+                    if remainder == 0 {
+                        0
+                    } else {
+                        q - remainder
+                    }
                 };
                 coeffs[coeff_idx * num_primes + prime_idx] = val_mod_q;
             }
