@@ -1971,15 +1971,18 @@ impl CudaCkksContext {
 
     /// NTT-based polynomial multiplication for negacyclic ring
     ///
-    /// Uses the NTT contexts to perform fast O(n log n) multiplication
-    /// instead of slow O(n²) schoolbook multiplication.
+    /// Uses CPU NTT contexts (which include proper negacyclic twisting)
+    /// instead of CUDA NTT (which only does cyclic convolution).
     fn multiply_polys_ntt(&self, a: &[u64], b: &[u64], num_primes: usize) -> Result<Vec<u64>, String> {
         let n = self.params.n;
         let mut result = vec![0u64; n * num_primes];
 
-        // For each RNS prime, use NTT multiplication
+        // For each RNS prime, use CPU NTT multiplication (has negacyclic twisting)
         for prime_idx in 0..num_primes {
-            let ntt_ctx = &self.ntt_contexts[prime_idx];
+            let q = self.params.moduli[prime_idx];
+
+            // Create CPU NTT context for this prime (includes negacyclic support)
+            let ntt_ctx = crate::clifford_fhe_v2::backends::cpu_optimized::ntt::NttContext::new(n, q);
 
             // Extract polynomials for this prime (strided layout)
             let mut p1 = vec![0u64; n];
@@ -1989,17 +1992,8 @@ impl CudaCkksContext {
                 p2[coeff_idx] = b[coeff_idx * num_primes + prime_idx];
             }
 
-            // Multiply using NTT (negacyclic convolution)
-            // Forward NTT on both polynomials
-            ntt_ctx.forward(&mut p1)?;
-            ntt_ctx.forward(&mut p2)?;
-
-            // Pointwise multiply in NTT domain
-            let mut product = vec![0u64; n];
-            ntt_ctx.pointwise_multiply(&p1, &p2, &mut product)?;
-
-            // Inverse NTT to get result in coefficient domain
-            ntt_ctx.inverse(&mut product)?;
+            // Multiply using CPU NTT (includes negacyclic twisting/untwisting)
+            let product = ntt_ctx.multiply_polynomials(&p1, &p2);
 
             // Store result back in strided layout
             for coeff_idx in 0..n {
