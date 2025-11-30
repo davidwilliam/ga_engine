@@ -2005,20 +2005,55 @@ impl CudaCkksContext {
     }
 
     /// Canonical embedding decode (real values only)
+    ///
+    /// Performs forward canonical embedding to recover slot values from polynomial coefficients.
+    /// This is the inverse of inverse_canonical_embedding used in encode.
     fn canonical_embed_decode_real(coeffs: &[i64], scale: f64, n: usize) -> Vec<f64> {
         use std::f64::consts::PI;
 
-        let slots = n / 2;
-        let mut values = vec![0.0; slots];
+        let m = 2 * n; // M = 2N
+        let num_slots = n / 2;
+        let g = 5; // Generator
 
-        // Simple decode: just take real part of first N/2 slots
-        // Full implementation would use iFFT
-        for i in 0..slots {
-            // Approximate decode: scale down by the scaling factor
-            values[i] = coeffs[i] as f64 / scale;
+        // Compute Galois orbit order
+        let e = Self::orbit_order(n, g);
+
+        // Convert to floating point (with scale normalization)
+        let coeffs_float: Vec<f64> = coeffs.iter().map(|&c| c as f64 / scale).collect();
+
+        // Forward canonical embedding: evaluate polynomial at ζ_M^{e[t]} for t = 0..N/2-1
+        // Formula: y_t = Σ_{j=0}^{N-1} c[j] * exp(+2πi * e[t] * j / M)
+        // For real results, take real part
+        let mut slots = vec![0.0; num_slots];
+
+        for t in 0..num_slots {
+            let mut sum_real = 0.0;
+            for j in 0..n {
+                // w_t(j) = exp(+2πi * e[t] * j / M)  (note: positive angle for decode)
+                let angle = 2.0 * PI * (e[t] as f64) * (j as f64) / (m as f64);
+                let cos_val = angle.cos();
+                sum_real += coeffs_float[j] * cos_val;
+            }
+            slots[t] = sum_real;
         }
 
-        values
+        slots
+    }
+
+    /// Compute Galois orbit order for canonical embedding
+    fn orbit_order(n: usize, g: usize) -> Vec<usize> {
+        let m = 2 * n; // M = 2N
+        let num_slots = n / 2; // N/2 slots
+
+        let mut e = vec![0usize; num_slots];
+        let mut cur = 1usize;
+
+        for t in 0..num_slots {
+            e[t] = cur; // odd exponent in [1..2N-1]
+            cur = (cur * g) % m;
+        }
+
+        e
     }
 }
 
