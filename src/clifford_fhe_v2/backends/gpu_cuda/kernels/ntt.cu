@@ -26,37 +26,36 @@ __device__ unsigned long long mul_mod(unsigned long long a, unsigned long long b
         return lo;
     }
 
-    // Slow path: Compute (hi * 2^64 + lo) mod q
-    // Method: First reduce hi, then combine with lo
+    // Slow path: Compute (hi * 2^64 + lo) mod q using bit-by-bit reduction
+    // Process the 128-bit number from MSB to LSB, doubling and adding bits
 
-    // Step 1: Compute hi_reduced = hi mod q
-    unsigned long long hi_reduced = hi % q;
+    unsigned long long result = 0;
 
-    // Step 2: Compute (hi_reduced * 2^64) mod q
-    // We use the fact that 2^64 mod q can be precomputed, but for now compute it
-    // Actually, let's use iterative doubling
-
-    unsigned long long hi_contribution = 0;
+    // Process high 64 bits (hi)
     for (int bit = 63; bit >= 0; bit--) {
-        // Double hi_contribution
-        hi_contribution = hi_contribution + hi_contribution;
-        if (hi_contribution >= q) hi_contribution -= q;
+        // Double result: result = (result * 2) mod q
+        result = result + result;
+        while (result >= q) result -= q;
 
-        // Add (2^bit * hi_reduced) if this bit of hi_reduced is set
-        if ((hi_reduced >> bit) & 1ULL) {
-            // Add 2^bit to hi_contribution (mod q)
-            unsigned long long power_of_2 = 1ULL << bit;
-            unsigned long long power_mod_q = power_of_2 % q;
-
-            hi_contribution += power_mod_q;
-            if (hi_contribution >= q) hi_contribution -= q;
+        // Add current bit if set
+        if ((hi >> bit) & 1ULL) {
+            result++;
+            if (result >= q) result -= q;
         }
     }
 
-    // Step 3: Add lo (mod q)
-    unsigned long long lo_reduced = lo % q;
-    unsigned long long result = hi_contribution + lo_reduced;
-    if (result >= q) result -= q;
+    // Process low 64 bits (lo)
+    for (int bit = 63; bit >= 0; bit--) {
+        // Double result
+        result = result + result;
+        while (result >= q) result -= q;
+
+        // Add current bit if set
+        if ((lo >> bit) & 1ULL) {
+            result++;
+            if (result >= q) result -= q;
+        }
+    }
 
     return result;
 }
