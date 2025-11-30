@@ -15,7 +15,7 @@ pub struct CudaNttContext {
     pub(crate) root: u64,
     pub twiddles: Vec<u64>,        // Made public for debugging
     pub twiddles_inv: Vec<u64>,    // Made public for debugging
-    pub(crate) n_inv: u64,
+    pub n_inv: u64,                // Made public for debugging
     log_n: usize,
     // Cached to avoid recompilation
     _kernels_loaded: bool,
