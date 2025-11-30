@@ -2001,8 +2001,17 @@ impl CudaCkksContext {
                 p2[coeff_idx] = b[coeff_idx * num_primes + prime_idx];
             }
 
+            // Debug first prime
+            if std::env::var("NTT_DEBUG").is_ok() && prime_idx == 0 {
+                println!("[NTT_DEBUG] Before multiply: p1[0]={}, p2[0]={}", p1[0], p2[0]);
+            }
+
             // Multiply using CPU NTT (includes negacyclic twisting/untwisting)
             let product = ntt_ctx.multiply_polynomials(&p1, &p2);
+
+            if std::env::var("NTT_DEBUG").is_ok() && prime_idx == 0 {
+                println!("[NTT_DEBUG] After multiply: product[0]={}", product[0]);
+            }
 
             // Store result back in strided layout
             for coeff_idx in 0..n {
