@@ -26,36 +26,54 @@ __device__ unsigned long long mul_mod(unsigned long long a, unsigned long long b
         return lo;
     }
 
-    // Slow path: Compute (hi * 2^64 + lo) mod q using bit-by-bit reduction
-    // Process the 128-bit number from MSB to LSB, doubling and adding bits
+    // Slow path: Compute (hi * 2^64 + lo) mod q
+    // Strategy: reduce hi first, then compute (hi_reduced * 2^64 + lo) mod q
 
-    unsigned long long result = 0;
+    // Step 1: Reduce hi using native % (this is safe, hi < 2^64, q < 2^64)
+    unsigned long long hi_mod = hi % q;
 
-    // Process high 64 bits (hi)
-    for (int bit = 63; bit >= 0; bit--) {
-        // Double result: result = (result * 2) mod q
-        result = result + result;
-        while (result >= q) result -= q;
+    // Step 2: Compute 2^64 mod q
+    // We can compute this by: (2^32 mod q)^2 mod q
+    unsigned long long pow2_32 = (1ULL << 32) % q;
 
-        // Add current bit if set
-        if ((hi >> bit) & 1ULL) {
-            result++;
-            if (result >= q) result -= q;
+    // Compute pow2_32 * pow2_32 to get 2^64 mod q
+    unsigned long long pow2_64_lo = pow2_32 * pow2_32;
+    unsigned long long pow2_64_hi = __umul64hi(pow2_32, pow2_32);
+
+    unsigned long long pow2_64_mod_q;
+    if (pow2_64_hi == 0) {
+        pow2_64_mod_q = pow2_64_lo % q;
+    } else {
+        // Very unlikely for typical FHE primes, but handle it
+        // Use bit-by-bit for this one computation
+        pow2_64_mod_q = 0;
+        for (int i = 0; i < 64; i++) {
+            pow2_64_mod_q = (pow2_64_mod_q * 2) % q;
         }
     }
 
-    // Process low 64 bits (lo)
-    for (int bit = 63; bit >= 0; bit--) {
-        // Double result
-        result = result + result;
-        while (result >= q) result -= q;
+    // Step 3: Compute (hi_mod * pow2_64_mod_q) mod q
+    unsigned long long prod_lo = hi_mod * pow2_64_mod_q;
+    unsigned long long prod_hi = __umul64hi(hi_mod, pow2_64_mod_q);
 
-        // Add current bit if set
-        if ((lo >> bit) & 1ULL) {
-            result++;
-            if (result >= q) result -= q;
+    unsigned long long hi_contribution;
+    if (prod_hi == 0) {
+        hi_contribution = prod_lo % q;
+    } else {
+        // Use bit-by-bit reduction for this product
+        hi_contribution = 0;
+        for (int bit = 63; bit >= 0; bit--) {
+            hi_contribution = (hi_contribution * 2) % q;
+            if ((prod_hi >> bit) & 1ULL) hi_contribution = (hi_contribution + 1) % q;
+        }
+        for (int bit = 63; bit >= 0; bit--) {
+            hi_contribution = (hi_contribution * 2) % q;
+            if ((prod_lo >> bit) & 1ULL) hi_contribution = (hi_contribution + 1) % q;
         }
     }
+
+    // Step 4: Add lo and reduce
+    unsigned long long result = (hi_contribution + (lo % q)) % q;
 
     return result;
 }
