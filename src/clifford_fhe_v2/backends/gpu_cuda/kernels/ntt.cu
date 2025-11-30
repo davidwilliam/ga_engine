@@ -11,8 +11,8 @@ extern "C" {
  * Modular multiplication without 128-bit types
  * Returns (a * b) % q
  *
- * Uses double precision floating point trick for modular reduction.
- * This is accurate enough for 60-bit primes and avoids 128-bit integers.
+ * Simple but correct implementation using bit-by-bit reduction.
+ * Optimized path for when product fits in 64 bits.
  */
 __device__ unsigned long long mul_mod(unsigned long long a, unsigned long long b, unsigned long long q) {
     // Compute full 128-bit product using hi and lo parts
@@ -21,41 +21,47 @@ __device__ unsigned long long mul_mod(unsigned long long a, unsigned long long b
 
     // Fast path: if hi == 0, simple modulo
     if (hi == 0) {
-        return lo >= q ? lo - q : lo;
+        // Product fits in 64 bits
+        if (lo >= q) {
+            lo -= q;
+            if (lo >= q) {
+                lo %= q;  // Only needed if lo >= 2*q
+            }
+        }
+        return lo;
     }
 
-    // Use floating point approximation for quotient
-    // quotient ≈ (a * b) / q
-    double a_d = (double)a;
-    double b_d = (double)b;
-    double q_d = (double)q;
-    double quotient_approx = (a_d * b_d) / q_d;
+    // Slow path: 128-bit modulo using bit-by-bit reduction
+    // Build up the result from high bit to low bit
+    unsigned long long result = 0;
 
-    // Get approximate quotient (might be off by ±1)
-    unsigned long long quotient = (unsigned long long)quotient_approx;
+    // Process high 64 bits
+    for (int i = 63; i >= 0; i--) {
+        // Double the current result
+        result = (result << 1);
+        if (result >= q) result -= q;
 
-    // Compute remainder: r = a*b - quotient*q
-    // This requires 128-bit computation, so we do it in parts
-    unsigned long long qprod_lo = quotient * q;
-    unsigned long long qprod_hi = __umul64hi(quotient, q);
-
-    // Subtract: (hi||lo) - (qprod_hi||qprod_lo)
-    unsigned long long r_lo = lo - qprod_lo;
-    unsigned long long r_hi = hi - qprod_hi - (lo < qprod_lo ? 1 : 0);  // borrow
-
-    // If r_hi != 0, we need to reduce further
-    // Since quotient might be off by ±1, at most 2 corrections needed
-    if (r_hi != 0 || r_lo >= q) {
-        if (r_hi != 0) {
-            // Result wrapped, add q
-            r_lo += q;
-        }
-        while (r_lo >= q) {
-            r_lo -= q;
+        // Add current bit if set
+        if ((hi >> i) & 1ULL) {
+            result++;
+            if (result >= q) result -= q;
         }
     }
 
-    return r_lo;
+    // Process low 64 bits
+    for (int i = 63; i >= 0; i--) {
+        // Double the current result
+        result = (result << 1);
+        if (result >= q) result -= q;
+
+        // Add current bit if set
+        if ((lo >> i) & 1ULL) {
+            result++;
+            if (result >= q) result -= q;
+        }
+    }
+
+    return result;
 }
 
 /**
