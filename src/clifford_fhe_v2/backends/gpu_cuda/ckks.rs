@@ -769,9 +769,10 @@ impl CudaCkksContext {
         ifft.process(&mut extended);
 
         // rustfft's inverse FFT does NOT normalize (confirmed in v1/slot_encoding.rs:132)
-        // We need to apply 2/N normalization to match CPU canonical embedding
-        // CPU uses: coeffs_float[j] = (2.0 / n) * sum
-        let normalization = 2.0 / self.params.n as f64;
+        // We need to normalize by 1/N to match CPU canonical embedding
+        // CPU manual DFT uses 2/N but with sum over N/2 slots (Hermitian symmetry)
+        // rustfft iFFT with full N conjugate pairs gives equivalent result with 1/N normalization
+        let normalization = 1.0 / self.params.n as f64;
         for val in &mut extended {
             *val *= normalization;
         }
