@@ -1,0 +1,351 @@
+//! Debug CUDA Division - Step-by-step validation
+//!
+//! This test validates each step of the homomorphic division pipeline
+//! to isolate where the error occurs.
+//!
+//! Run with:
+//! ```bash
+//! cargo run --release --features v2,v2-gpu-cuda --example debug_cuda_division
+//! ```
+
+#[cfg(all(feature = "v2", feature = "v2-gpu-cuda"))]
+use ga_engine::clifford_fhe_v2::{
+    backends::{
+        cpu_optimized::keys::KeyContext,
+        gpu_cuda::{
+            ckks::CudaCkksContext,
+            device::CudaDeviceContext,
+            inversion::{multiply_ciphertexts_gpu, subtract_ciphertexts_gpu},
+            relin_keys::CudaRelinKeys,
+        },
+    },
+    params::CliffordFHEParams,
+};
+
+#[cfg(all(feature = "v2", feature = "v2-gpu-cuda"))]
+use std::sync::Arc;
+
+/// Convert CPU SecretKey to CUDA strided format
+#[cfg(all(feature = "v2", feature = "v2-gpu-cuda"))]
+fn secret_key_to_strided(
+    sk: &ga_engine::clifford_fhe_v2::backends::cpu_optimized::keys::SecretKey,
+    num_primes: usize,
+) -> Vec<u64> {
+    let n = sk.n;
+    let mut strided = vec![0u64; n * num_primes];
+    for coeff_idx in 0..n {
+        for prime_idx in 0..num_primes {
+            strided[coeff_idx * num_primes + prime_idx] = sk.coeffs[coeff_idx].values[prime_idx];
+        }
+    }
+    strided
+}
+
+#[cfg(all(feature = "v2", feature = "v2-gpu-cuda"))]
+fn main() -> Result<(), String> {
+    println!("╔════════════════════════════════════════════════════════════════════════╗");
+    println!("║     CUDA Division Debug - Step-by-Step Validation                     ║");
+    println!("╚════════════════════════════════════════════════════════════════════════╝\n");
+
+    // Use smaller parameters for faster debugging
+    // N=1024 with 5 primes gives us max level 4 (enough for 1 NR iteration + final mult)
+    println!("Step 0: Setup with small parameters...");
+    let device = Arc::new(CudaDeviceContext::new()?);
+    let params = CliffordFHEParams::new_test_ntt_1024();
+    let num_primes = params.moduli.len();
+    let max_level = num_primes - 1;
+    let scale = params.scale;
+
+    println!("  N = {}", params.n);
+    println!("  num_primes = {} (max_level = {})", num_primes, max_level);
+    println!("  scale = 2^{}", (scale.log2() as u32));
+    println!();
+
+    // Generate keys
+    println!("Step 1: Generate keys...");
+    let key_ctx = KeyContext::new(params.clone());
+    let (pk, sk, _evk) = key_ctx.keygen();
+    println!("  Keys generated\n");
+
+    // Create CUDA context
+    println!("Step 2: Create CUDA CKKS context...");
+    let ctx = CudaCkksContext::new(params.clone())?;
+    let sk_strided = secret_key_to_strided(&sk, num_primes);
+    println!("  Context ready\n");
+
+    // Generate relin keys
+    println!("Step 3: Generate relinearization keys...");
+    let relin_keys = CudaRelinKeys::new_gpu(
+        device.clone(),
+        params.clone(),
+        sk_strided.clone(),
+        16,
+        ctx.ntt_contexts(),
+    )?;
+    println!("  Relin keys ready\n");
+
+    // ========================================
+    // TEST 1: Basic encryption/decryption
+    // ========================================
+    println!("════════════════════════════════════════════════════════════════════════");
+    println!("TEST 1: Basic Encryption/Decryption");
+    println!("════════════════════════════════════════════════════════════════════════\n");
+
+    let test_val = 3.5;
+    let pt = ctx.encode(&[test_val], scale, max_level)?;
+    let ct = ctx.encrypt(&pt, &pk)?;
+    let pt_dec = ctx.decrypt(&ct, &sk)?;
+    let result = ctx.decode(&pt_dec)?;
+
+    let error = (result[0] - test_val).abs();
+    println!("  Input:    {:.10}", test_val);
+    println!("  Output:   {:.10}", result[0]);
+    println!("  Error:    {:.2e}", error);
+
+    if error < 1e-6 {
+        println!("  ✓ PASS\n");
+    } else {
+        println!("  ✗ FAIL - Basic encryption broken!\n");
+        return Err("Basic encryption test failed".to_string());
+    }
+
+    // ========================================
+    // TEST 2: Ciphertext multiplication (single)
+    // ========================================
+    println!("════════════════════════════════════════════════════════════════════════");
+    println!("TEST 2: Single Ciphertext Multiplication");
+    println!("════════════════════════════════════════════════════════════════════════\n");
+
+    let a_val = 2.0;
+    let b_val = 3.0;
+    let expected_product = a_val * b_val;
+
+    let pt_a = ctx.encode(&[a_val], scale, max_level)?;
+    let pt_b = ctx.encode(&[b_val], scale, max_level)?;
+    let ct_a = ctx.encrypt(&pt_a, &pk)?;
+    let ct_b = ctx.encrypt(&pt_b, &pk)?;
+
+    println!("  Inputs: {:.1} × {:.1} = {:.1}", a_val, b_val, expected_product);
+    println!("  ct_a level: {}, ct_b level: {}", ct_a.level, ct_b.level);
+
+    let ct_prod = multiply_ciphertexts_gpu(&ct_a, &ct_b, &relin_keys, &ctx)?;
+    println!("  ct_prod level: {}", ct_prod.level);
+
+    let pt_prod = ctx.decrypt(&ct_prod, &sk)?;
+    let result_prod = ctx.decode(&pt_prod)?;
+
+    let error_prod = (result_prod[0] - expected_product).abs();
+    let rel_error_prod = error_prod / expected_product;
+
+    println!("  Expected: {:.10}", expected_product);
+    println!("  Got:      {:.10}", result_prod[0]);
+    println!("  Error:    {:.2e}", error_prod);
+    println!("  Rel Err:  {:.2e}", rel_error_prod);
+
+    if rel_error_prod < 1e-3 {
+        println!("  ✓ PASS\n");
+    } else {
+        println!("  ✗ FAIL - Multiplication broken!\n");
+        return Err("Multiplication test failed".to_string());
+    }
+
+    // ========================================
+    // TEST 3: Ciphertext subtraction
+    // ========================================
+    println!("════════════════════════════════════════════════════════════════════════");
+    println!("TEST 3: Ciphertext Subtraction");
+    println!("════════════════════════════════════════════════════════════════════════\n");
+
+    let c_val = 5.0;
+    let d_val = 2.0;
+    let expected_diff = c_val - d_val;
+
+    let pt_c = ctx.encode(&[c_val], scale, max_level)?;
+    let pt_d = ctx.encode(&[d_val], scale, max_level)?;
+    let ct_c = ctx.encrypt(&pt_c, &pk)?;
+    let ct_d = ctx.encrypt(&pt_d, &pk)?;
+
+    println!("  Inputs: {:.1} - {:.1} = {:.1}", c_val, d_val, expected_diff);
+
+    let ct_diff = subtract_ciphertexts_gpu(&ct_c, &ct_d, &ctx)?;
+
+    let pt_diff = ctx.decrypt(&ct_diff, &sk)?;
+    let result_diff = ctx.decode(&pt_diff)?;
+
+    let error_diff = (result_diff[0] - expected_diff).abs();
+    let rel_error_diff = error_diff / expected_diff;
+
+    println!("  Expected: {:.10}", expected_diff);
+    println!("  Got:      {:.10}", result_diff[0]);
+    println!("  Error:    {:.2e}", error_diff);
+    println!("  Rel Err:  {:.2e}", rel_error_diff);
+
+    if rel_error_diff < 1e-3 {
+        println!("  ✓ PASS\n");
+    } else {
+        println!("  ✗ FAIL - Subtraction broken!\n");
+        return Err("Subtraction test failed".to_string());
+    }
+
+    // ========================================
+    // TEST 4: Two consecutive multiplications
+    // ========================================
+    println!("════════════════════════════════════════════════════════════════════════");
+    println!("TEST 4: Two Consecutive Multiplications");
+    println!("════════════════════════════════════════════════════════════════════════\n");
+
+    let x_val = 2.0;
+    let y_val = 3.0;
+    let z_val = 4.0;
+    let expected_xyz = x_val * y_val * z_val;
+
+    let pt_x = ctx.encode(&[x_val], scale, max_level)?;
+    let pt_y = ctx.encode(&[y_val], scale, max_level)?;
+    let pt_z = ctx.encode(&[z_val], scale, max_level)?;
+    let ct_x = ctx.encrypt(&pt_x, &pk)?;
+    let ct_y = ctx.encrypt(&pt_y, &pk)?;
+    let ct_z = ctx.encrypt(&pt_z, &pk)?;
+
+    println!("  Inputs: {:.1} × {:.1} × {:.1} = {:.1}", x_val, y_val, z_val, expected_xyz);
+    println!("  Initial levels: ct_x={}, ct_y={}, ct_z={}", ct_x.level, ct_y.level, ct_z.level);
+
+    // First multiplication: x * y
+    let ct_xy = multiply_ciphertexts_gpu(&ct_x, &ct_y, &relin_keys, &ctx)?;
+    println!("  After x*y: level={}", ct_xy.level);
+
+    // Mod-switch z to match xy's level
+    let ct_z_switched = ct_z.mod_switch_to_level(ct_xy.level);
+    println!("  After mod_switch z: level={}", ct_z_switched.level);
+
+    // Second multiplication: (x*y) * z
+    let ct_xyz = multiply_ciphertexts_gpu(&ct_xy, &ct_z_switched, &relin_keys, &ctx)?;
+    println!("  After (x*y)*z: level={}", ct_xyz.level);
+
+    let pt_xyz = ctx.decrypt(&ct_xyz, &sk)?;
+    let result_xyz = ctx.decode(&pt_xyz)?;
+
+    let error_xyz = (result_xyz[0] - expected_xyz).abs();
+    let rel_error_xyz = error_xyz / expected_xyz;
+
+    println!("  Expected: {:.10}", expected_xyz);
+    println!("  Got:      {:.10}", result_xyz[0]);
+    println!("  Error:    {:.2e}", error_xyz);
+    println!("  Rel Err:  {:.2e}", rel_error_xyz);
+
+    if rel_error_xyz < 1e-2 {
+        println!("  ✓ PASS\n");
+    } else {
+        println!("  ✗ FAIL - Consecutive multiplications broken!\n");
+        return Err("Consecutive multiplication test failed".to_string());
+    }
+
+    // ========================================
+    // TEST 5: Newton-Raphson single iteration
+    // (x_{n+1} = x_n * (2 - a * x_n))
+    // ========================================
+    println!("════════════════════════════════════════════════════════════════════════");
+    println!("TEST 5: Newton-Raphson Single Iteration");
+    println!("════════════════════════════════════════════════════════════════════════\n");
+
+    // Compute 1/4 with initial guess 0.25 (perfect guess)
+    let denom = 4.0;
+    let x0 = 0.25;  // Initial guess = 1/denom (perfect)
+
+    // One NR iteration: x1 = x0 * (2 - denom * x0)
+    // With perfect guess: x1 = 0.25 * (2 - 4*0.25) = 0.25 * (2 - 1) = 0.25 * 1 = 0.25
+    let expected_x1 = x0 * (2.0 - denom * x0);
+
+    println!("  Computing 1/{} with initial guess {}", denom, x0);
+    println!("  Expected after 1 NR iteration: {}", expected_x1);
+    println!();
+
+    // Encode and encrypt
+    let pt_denom = ctx.encode(&[denom], scale, max_level)?;
+    let pt_x0 = ctx.encode(&[x0], scale, max_level)?;
+    let ct_denom = ctx.encrypt(&pt_denom, &pk)?;
+    let ct_x0 = ctx.encrypt(&pt_x0, &pk)?;
+
+    println!("  ct_denom level: {}", ct_denom.level);
+    println!("  ct_x0 level: {}", ct_x0.level);
+
+    // Step 1: a * x_n
+    let ct_ax = multiply_ciphertexts_gpu(&ct_denom, &ct_x0, &relin_keys, &ctx)?;
+    println!("  After denom*x0: level={}", ct_ax.level);
+
+    // Decrypt to check intermediate
+    let pt_ax = ctx.decrypt(&ct_ax, &sk)?;
+    let result_ax = ctx.decode(&pt_ax)?;
+    let expected_ax = denom * x0;
+    println!("  denom*x0: expected={:.6}, got={:.6}, error={:.2e}",
+             expected_ax, result_ax[0], (result_ax[0] - expected_ax).abs());
+
+    // Step 2: Create constant 2 at the same level
+    let num_slots = params.n / 2;
+    let mut two_vec = vec![0.0; num_slots];
+    two_vec[0] = 2.0;
+    let pt_two = ctx.encode(&two_vec, ct_ax.scale, ct_ax.level)?;
+
+    // Create trivial ciphertext (c0 = pt, c1 = 0)
+    use ga_engine::clifford_fhe_v2::backends::gpu_cuda::ckks::CudaCiphertext;
+    let ct_two = CudaCiphertext {
+        c0: pt_two.poly.clone(),
+        c1: vec![0u64; pt_two.poly.len()],
+        n: pt_two.n,
+        num_primes: pt_two.num_primes,
+        level: pt_two.level,
+        scale: pt_two.scale,
+    };
+    println!("  ct_two (trivial) level: {}", ct_two.level);
+
+    // Step 3: 2 - a*x_n
+    let ct_2_minus_ax = subtract_ciphertexts_gpu(&ct_two, &ct_ax, &ctx)?;
+    println!("  After 2 - denom*x0: level={}", ct_2_minus_ax.level);
+
+    // Decrypt to check
+    let pt_2_minus_ax = ctx.decrypt(&ct_2_minus_ax, &sk)?;
+    let result_2_minus_ax = ctx.decode(&pt_2_minus_ax)?;
+    let expected_2_minus_ax = 2.0 - denom * x0;
+    println!("  2-denom*x0: expected={:.6}, got={:.6}, error={:.2e}",
+             expected_2_minus_ax, result_2_minus_ax[0], (result_2_minus_ax[0] - expected_2_minus_ax).abs());
+
+    // Step 4: Mod-switch x0 to match level
+    let ct_x0_switched = ct_x0.mod_switch_to_level(ct_2_minus_ax.level);
+    println!("  ct_x0 after mod_switch: level={}", ct_x0_switched.level);
+
+    // Step 5: x_n * (2 - a*x_n)
+    let ct_x1 = multiply_ciphertexts_gpu(&ct_x0_switched, &ct_2_minus_ax, &relin_keys, &ctx)?;
+    println!("  After x0 * (2 - denom*x0): level={}", ct_x1.level);
+
+    // Final decrypt
+    let pt_x1 = ctx.decrypt(&ct_x1, &sk)?;
+    let result_x1 = ctx.decode(&pt_x1)?;
+
+    let error_x1 = (result_x1[0] - expected_x1).abs();
+    let rel_error_x1 = error_x1 / expected_x1.abs().max(1e-10);
+
+    println!();
+    println!("  Final Result:");
+    println!("  Expected x1: {:.10}", expected_x1);
+    println!("  Got x1:      {:.10}", result_x1[0]);
+    println!("  Error:       {:.2e}", error_x1);
+    println!("  Rel Err:     {:.2e}", rel_error_x1);
+
+    if rel_error_x1 < 1e-2 {
+        println!("  ✓ PASS\n");
+    } else {
+        println!("  ✗ FAIL - Newton-Raphson iteration broken!\n");
+        return Err("Newton-Raphson test failed".to_string());
+    }
+
+    println!("════════════════════════════════════════════════════════════════════════");
+    println!("ALL TESTS PASSED!");
+    println!("════════════════════════════════════════════════════════════════════════");
+
+    Ok(())
+}
+
+#[cfg(not(all(feature = "v2", feature = "v2-gpu-cuda")))]
+fn main() {
+    println!("This example requires the 'v2' and 'v2-gpu-cuda' features.");
+    println!("Run with: cargo run --release --features v2,v2-gpu-cuda --example debug_cuda_division");
+}
