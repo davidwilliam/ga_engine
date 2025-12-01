@@ -346,4 +346,68 @@ __global__ void rns_flat_to_strided(
     poly_out[coeff_idx * stride + prime_idx] = poly_in[idx];
 }
 
+/**
+ * Negacyclic TWIST: Multiply polynomial by psi^i for each coefficient
+ *
+ * This converts the standard polynomial ring multiplication to negacyclic
+ * convolution in R[X]/(X^N + 1), which is required for CKKS.
+ *
+ * For each coefficient a[i], we compute: a[i] = a[i] * psi^i mod q
+ *
+ * Layout: FLAT - poly[prime_idx * n + coeff_idx]
+ *
+ * psi_powers layout: psi_powers[prime_idx * n + coeff_idx] = psi[prime_idx]^coeff_idx
+ */
+__global__ void rns_negacyclic_twist(
+    unsigned long long* poly,            // In/Out: polynomial (flat layout)
+    const unsigned long long* psi_powers, // psi^i for each (prime, coeff) [num_primes * n]
+    const unsigned long long* moduli,    // RNS moduli
+    unsigned int n,                      // Ring dimension
+    unsigned int num_primes              // Number of active primes
+) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int total_elements = n * num_primes;
+
+    if (idx >= total_elements) return;
+
+    // Determine which prime we're working with
+    unsigned int prime_idx = idx / n;
+    unsigned long long q = moduli[prime_idx];
+
+    // Multiply by psi^coeff_idx
+    poly[idx] = mul_mod_128(poly[idx], psi_powers[idx], q);
+}
+
+/**
+ * Negacyclic UNTWIST: Multiply polynomial by psi^{-i} for each coefficient
+ *
+ * This is the inverse of the twist operation, applied after inverse NTT
+ * to get the final negacyclic convolution result.
+ *
+ * For each coefficient a[i], we compute: a[i] = a[i] * psi^{-i} mod q
+ *
+ * Layout: FLAT - poly[prime_idx * n + coeff_idx]
+ *
+ * psi_inv_powers layout: psi_inv_powers[prime_idx * n + coeff_idx] = psi[prime_idx]^{-coeff_idx}
+ */
+__global__ void rns_negacyclic_untwist(
+    unsigned long long* poly,                // In/Out: polynomial (flat layout)
+    const unsigned long long* psi_inv_powers, // psi^{-i} for each (prime, coeff) [num_primes * n]
+    const unsigned long long* moduli,        // RNS moduli
+    unsigned int n,                          // Ring dimension
+    unsigned int num_primes                  // Number of active primes
+) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int total_elements = n * num_primes;
+
+    if (idx >= total_elements) return;
+
+    // Determine which prime we're working with
+    unsigned int prime_idx = idx / n;
+    unsigned long long q = moduli[prime_idx];
+
+    // Multiply by psi^{-coeff_idx}
+    poly[idx] = mul_mod_128(poly[idx], psi_inv_powers[idx], q);
+}
+
 } // extern "C"

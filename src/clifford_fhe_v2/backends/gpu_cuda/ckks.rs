@@ -51,6 +51,14 @@ pub struct CudaCkksContext {
 
     /// Per-prime psi inverses for negacyclic untwist
     psi_inv_per_prime: Vec<u64>,
+
+    /// GPU-cached psi powers for negacyclic twist (FLAT layout)
+    /// Layout: psi_powers[prime_idx * n + coeff_idx] = psi[prime_idx]^coeff_idx
+    gpu_psi_powers: Option<CudaSlice<u64>>,
+
+    /// GPU-cached psi inverse powers for negacyclic untwist (FLAT layout)
+    /// Layout: psi_inv_powers[prime_idx * n + coeff_idx] = psi[prime_idx]^{-coeff_idx}
+    gpu_psi_inv_powers: Option<CudaSlice<u64>>,
 }
 
 /// CUDA ciphertext representation
@@ -225,6 +233,8 @@ impl CudaCkksContext {
             "rns_sub",
             "rns_negate",
             "rns_pointwise_multiply_strided",
+            "rns_negacyclic_twist",
+            "rns_negacyclic_untwist",
         ]).map_err(|e| format!("Failed to load RNS PTX: {:?}", e))?;
 
         // Precompute and cache twiddles on GPU for batched NTT
@@ -255,8 +265,34 @@ impl CudaCkksContext {
         let gpu_moduli = device.device.htod_copy(all_moduli)
             .map_err(|e| format!("Failed to cache moduli on GPU: {:?}", e))?;
 
-        println!("  ✓ Cached {}KB twiddles and {} moduli on GPU in {:.3}s",
-                 (n * num_primes * 8 * 2) / 1024,
+        // Precompute psi powers for negacyclic twist/untwist (FLAT layout)
+        // Layout: psi_powers_flat[prime_idx * n + coeff_idx] = psi[prime_idx]^coeff_idx
+        let mut all_psi_powers = Vec::with_capacity(n * num_primes);
+        let mut all_psi_inv_powers = Vec::with_capacity(n * num_primes);
+
+        for (prime_idx, &q) in params.moduli.iter().enumerate() {
+            let psi = psi_per_prime[prime_idx];
+            let psi_inv = psi_inv_per_prime[prime_idx];
+
+            // Compute psi^0, psi^1, psi^2, ..., psi^(n-1)
+            let mut psi_power = 1u64;
+            let mut psi_inv_power = 1u64;
+            for _ in 0..n {
+                all_psi_powers.push(psi_power);
+                all_psi_inv_powers.push(psi_inv_power);
+                psi_power = Self::mul_mod(psi_power, psi, q);
+                psi_inv_power = Self::mul_mod(psi_inv_power, psi_inv, q);
+            }
+        }
+
+        let gpu_psi_powers = device.device.htod_copy(all_psi_powers)
+            .map_err(|e| format!("Failed to cache psi powers on GPU: {:?}", e))?;
+
+        let gpu_psi_inv_powers = device.device.htod_copy(all_psi_inv_powers)
+            .map_err(|e| format!("Failed to cache psi inverse powers on GPU: {:?}", e))?;
+
+        println!("  ✓ Cached {}KB twiddles, psi powers, and {} moduli on GPU in {:.3}s",
+                 (n * num_primes * 8 * 4) / 1024,  // 2 for twiddles, 2 for psi
                  num_primes,
                  cache_start.elapsed().as_secs_f64());
 
@@ -274,6 +310,8 @@ impl CudaCkksContext {
             gpu_moduli: Some(gpu_moduli),
             psi_per_prime,
             psi_inv_per_prime,
+            gpu_psi_powers: Some(gpu_psi_powers),
+            gpu_psi_inv_powers: Some(gpu_psi_inv_powers),
         })
     }
 
@@ -290,6 +328,12 @@ impl CudaCkksContext {
     /// Get reference to rescale inversion table
     pub fn rescale_inv_table(&self) -> &[Vec<u64>] {
         &self.rescale_inv_table
+    }
+
+    /// Modular multiplication: (a * b) mod q
+    /// Uses u128 to avoid overflow
+    fn mul_mod(a: u64, b: u64, q: u64) -> u64 {
+        ((a as u128 * b as u128) % q as u128) as u64
     }
 
     /// Encrypt plaintext using public key
@@ -1131,7 +1175,14 @@ impl CudaCkksContext {
         let mut gpu_d1 = self.device.device.htod_copy(d1_flat)
             .map_err(|e| format!("Failed to upload d1: {:?}", e))?;
 
-        // Step 2: Forward NTT - ALL on GPU!
+        // Step 2a: TWIST - apply psi^i for negacyclic convolution
+        // CRITICAL: Without this, we get cyclic convolution instead of negacyclic!
+        self.apply_negacyclic_twist_gpu(&mut gpu_c0, num_active_primes)?;
+        self.apply_negacyclic_twist_gpu(&mut gpu_c1, num_active_primes)?;
+        self.apply_negacyclic_twist_gpu(&mut gpu_d0, num_active_primes)?;
+        self.apply_negacyclic_twist_gpu(&mut gpu_d1, num_active_primes)?;
+
+        // Step 2b: Forward NTT - ALL on GPU!
         self.ntt_forward_batched_gpu(&mut gpu_c0, num_active_primes)?;
         self.ntt_forward_batched_gpu(&mut gpu_c1, num_active_primes)?;
         self.ntt_forward_batched_gpu(&mut gpu_d0, num_active_primes)?;
@@ -1152,11 +1203,18 @@ impl CudaCkksContext {
         self.ntt_pointwise_multiply_batched_gpu(&gpu_c1, &gpu_d0, &mut gpu_c1_part2, num_active_primes)?;
         self.ntt_pointwise_multiply_batched_gpu(&gpu_c1, &gpu_d1, &mut gpu_c2_result, num_active_primes)?;
 
-        // Step 4: Inverse NTT - ALL on GPU!
+        // Step 4a: Inverse NTT - ALL on GPU!
         self.ntt_inverse_batched_gpu(&mut gpu_c0_result, num_active_primes)?;
         self.ntt_inverse_batched_gpu(&mut gpu_c1_part1, num_active_primes)?;
         self.ntt_inverse_batched_gpu(&mut gpu_c1_part2, num_active_primes)?;
         self.ntt_inverse_batched_gpu(&mut gpu_c2_result, num_active_primes)?;
+
+        // Step 4b: UNTWIST - apply psi^{-i} to convert cyclic→negacyclic result
+        // CRITICAL: Without this, the result is in the wrong polynomial ring!
+        self.apply_negacyclic_untwist_gpu(&mut gpu_c0_result, num_active_primes)?;
+        self.apply_negacyclic_untwist_gpu(&mut gpu_c1_part1, num_active_primes)?;
+        self.apply_negacyclic_untwist_gpu(&mut gpu_c1_part2, num_active_primes)?;
+        self.apply_negacyclic_untwist_gpu(&mut gpu_c2_result, num_active_primes)?;
 
         // Step 5: Add c1_part1 + c1_part2 on GPU using rns_add kernel
         let mut gpu_c1_result = self.device.device.alloc_zeros::<u64>(n * num_active_primes)
@@ -1742,6 +1800,112 @@ impl CudaCkksContext {
                 num_primes as u32,
             ))
             .map_err(|e| format!("Batched pointwise multiply failed: {:?}", e))?;
+        }
+
+        Ok(())
+    }
+
+    /// Apply negacyclic TWIST on GPU: multiply each coefficient by psi^i
+    ///
+    /// This converts polynomial multiplication in the standard ring to
+    /// negacyclic convolution in R[X]/(X^N + 1), which is required for CKKS.
+    ///
+    /// # Arguments
+    /// * `gpu_data` - Polynomial in FLAT layout: data[prime_idx * n + coeff_idx]
+    /// * `num_primes` - Number of active RNS primes
+    fn apply_negacyclic_twist_gpu(
+        &self,
+        gpu_data: &mut CudaSlice<u64>,
+        num_primes: usize,
+    ) -> Result<(), String> {
+        use cudarc::driver::LaunchAsync;
+
+        let n = self.params.n;
+        let total_elements = n * num_primes;
+
+        if gpu_data.len() != total_elements {
+            return Err(format!("Expected {} elements, got {}", total_elements, gpu_data.len()));
+        }
+
+        let gpu_psi_powers = self.gpu_psi_powers.as_ref()
+            .ok_or("GPU psi powers not initialized")?;
+        let gpu_moduli = self.gpu_moduli.as_ref()
+            .ok_or("GPU moduli not initialized")?;
+
+        let func = self.device.device.get_func("rns_module", "rns_negacyclic_twist")
+            .ok_or("Failed to get rns_negacyclic_twist function")?;
+
+        let threads_per_block = 256;
+        let num_blocks = (total_elements + threads_per_block - 1) / threads_per_block;
+
+        let cfg = LaunchConfig {
+            grid_dim: (num_blocks as u32, 1, 1),
+            block_dim: (threads_per_block as u32, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        unsafe {
+            func.launch(cfg, (
+                gpu_data,
+                gpu_psi_powers,
+                gpu_moduli,
+                n as u32,
+                num_primes as u32,
+            ))
+            .map_err(|e| format!("Negacyclic twist failed: {:?}", e))?;
+        }
+
+        Ok(())
+    }
+
+    /// Apply negacyclic UNTWIST on GPU: multiply each coefficient by psi^{-i}
+    ///
+    /// This is the inverse of the twist operation, applied after inverse NTT
+    /// to get the final negacyclic convolution result.
+    ///
+    /// # Arguments
+    /// * `gpu_data` - Polynomial in FLAT layout: data[prime_idx * n + coeff_idx]
+    /// * `num_primes` - Number of active RNS primes
+    fn apply_negacyclic_untwist_gpu(
+        &self,
+        gpu_data: &mut CudaSlice<u64>,
+        num_primes: usize,
+    ) -> Result<(), String> {
+        use cudarc::driver::LaunchAsync;
+
+        let n = self.params.n;
+        let total_elements = n * num_primes;
+
+        if gpu_data.len() != total_elements {
+            return Err(format!("Expected {} elements, got {}", total_elements, gpu_data.len()));
+        }
+
+        let gpu_psi_inv_powers = self.gpu_psi_inv_powers.as_ref()
+            .ok_or("GPU psi inverse powers not initialized")?;
+        let gpu_moduli = self.gpu_moduli.as_ref()
+            .ok_or("GPU moduli not initialized")?;
+
+        let func = self.device.device.get_func("rns_module", "rns_negacyclic_untwist")
+            .ok_or("Failed to get rns_negacyclic_untwist function")?;
+
+        let threads_per_block = 256;
+        let num_blocks = (total_elements + threads_per_block - 1) / threads_per_block;
+
+        let cfg = LaunchConfig {
+            grid_dim: (num_blocks as u32, 1, 1),
+            block_dim: (threads_per_block as u32, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        unsafe {
+            func.launch(cfg, (
+                gpu_data,
+                gpu_psi_inv_powers,
+                gpu_moduli,
+                n as u32,
+                num_primes as u32,
+            ))
+            .map_err(|e| format!("Negacyclic untwist failed: {:?}", e))?;
         }
 
         Ok(())
