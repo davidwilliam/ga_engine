@@ -2308,4 +2308,65 @@ impl CudaCiphertext {
             scale: new_scale,
         })
     }
+
+    /// Mod-switch ciphertext to a lower level WITHOUT dividing by the dropped primes
+    ///
+    /// This is different from rescale:
+    /// - **Rescale**: Divides coefficients by dropped prime, reduces scale
+    /// - **Mod-switch**: Just truncates RNS representation, keeps scale the same
+    ///
+    /// Use mod-switch for level alignment before operations.
+    /// Use rescale after multiplication to manage noise growth.
+    ///
+    /// # Arguments
+    /// * `target_level` - Target level (must be < current level)
+    ///
+    /// # Returns
+    /// Ciphertext at the target level with same scale
+    pub fn mod_switch_to_level(&self, target_level: usize) -> Self {
+        if target_level == self.level {
+            return self.clone();
+        }
+
+        assert!(
+            target_level < self.level,
+            "Target level {} must be less than current level {}",
+            target_level,
+            self.level
+        );
+
+        let n = self.n;
+        let old_num_primes = self.num_primes;
+        let new_num_primes = target_level + 1;
+
+        // Truncate c0: keep only first (target_level + 1) primes for each coefficient
+        // CUDA uses strided layout: c[coeff_idx * num_primes + prime_idx]
+        let mut new_c0 = vec![0u64; n * new_num_primes];
+        for coeff_idx in 0..n {
+            for prime_idx in 0..new_num_primes {
+                let old_idx = coeff_idx * old_num_primes + prime_idx;
+                let new_idx = coeff_idx * new_num_primes + prime_idx;
+                new_c0[new_idx] = self.c0[old_idx];
+            }
+        }
+
+        // Truncate c1: keep only first (target_level + 1) primes for each coefficient
+        let mut new_c1 = vec![0u64; n * new_num_primes];
+        for coeff_idx in 0..n {
+            for prime_idx in 0..new_num_primes {
+                let old_idx = coeff_idx * old_num_primes + prime_idx;
+                let new_idx = coeff_idx * new_num_primes + prime_idx;
+                new_c1[new_idx] = self.c1[old_idx];
+            }
+        }
+
+        Self {
+            c0: new_c0,
+            c1: new_c1,
+            n,
+            num_primes: new_num_primes,
+            level: target_level,
+            scale: self.scale,  // Scale stays the same for mod_switch
+        }
+    }
 }
