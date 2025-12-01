@@ -85,6 +85,29 @@ fn main() -> Result<(), String> {
     println!("  Relin keys ready\n");
 
     // ========================================
+    // TEST 0: Encode/Decode (no encryption)
+    // ========================================
+    println!("════════════════════════════════════════════════════════════════════════");
+    println!("TEST 0: Encode/Decode (no encryption)");
+    println!("════════════════════════════════════════════════════════════════════════\n");
+
+    let test_val0 = 3.5;
+    let pt0 = ctx.encode(&[test_val0], scale, max_level)?;
+    let result0 = ctx.decode(&pt0)?;
+
+    let error0 = (result0[0] - test_val0).abs();
+    println!("  Input:    {:.10}", test_val0);
+    println!("  Output:   {:.10}", result0[0]);
+    println!("  Error:    {:.2e}", error0);
+
+    if error0 < 1e-6 {
+        println!("  ✓ PASS\n");
+    } else {
+        println!("  ✗ FAIL - Encode/decode broken!\n");
+        return Err("Encode/decode test failed".to_string());
+    }
+
+    // ========================================
     // TEST 1: Basic encryption/decryption
     // ========================================
     println!("════════════════════════════════════════════════════════════════════════");
@@ -93,8 +116,22 @@ fn main() -> Result<(), String> {
 
     let test_val = 3.5;
     let pt = ctx.encode(&[test_val], scale, max_level)?;
+
+    // Debug: Check plaintext before encryption
+    println!("  DEBUG: pt.poly[0] (first coeff, prime 0) = {}", pt.poly[0]);
+    println!("  DEBUG: pt.level = {}, pt.num_primes = {}, pt.scale = {}", pt.level, pt.num_primes, pt.scale);
+
     let ct = ctx.encrypt(&pt, &pk)?;
+
+    // Debug: Check ciphertext
+    println!("  DEBUG: ct.c0[0] = {}, ct.c1[0] = {}", ct.c0[0], ct.c1[0]);
+    println!("  DEBUG: ct.level = {}, ct.num_primes = {}", ct.level, ct.num_primes);
+
     let pt_dec = ctx.decrypt(&ct, &sk)?;
+
+    // Debug: Check decrypted plaintext
+    println!("  DEBUG: pt_dec.poly[0] = {}", pt_dec.poly[0]);
+
     let result = ctx.decode(&pt_dec)?;
 
     let error = (result[0] - test_val).abs();
