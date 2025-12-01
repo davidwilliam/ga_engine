@@ -202,21 +202,41 @@ impl CudaRelinKeys {
         // Generate key switching components
         let mut ks_components = Vec::with_capacity(self.dnum);
 
+        // CRITICAL FIX: Precompute B^t mod q for each prime and each digit
+        // This avoids u128 overflow when t is large (e.g., B^7 = 2^140 > 2^128)
+        // Matches Metal implementation in relin_keys.rs lines 148-159
+        let base = self.base_w;
+        let mut bpow_t_mod_q = vec![vec![0u64; num_primes_key]; self.dnum];
+        for (j, &q) in self.params.moduli[..num_primes_key].iter().enumerate() {
+            let q_u128 = q as u128;
+            let mut p = 1u128;  // B^0 = 1
+            for t in 0..self.dnum {
+                bpow_t_mod_q[t][j] = (p % q_u128) as u64;
+                p = (p * (base as u128)) % q_u128;  // Incrementally compute B^(t+1) mod q
+            }
+        }
+
         for digit_idx in 0..self.dnum {
             // Generate random polynomial a_i
             let a_i = self.generate_random_poly(num_primes_key);
 
-            // Compute -a_i · s^2 using GPU NTT
-            let mut b_i = self.gpu_multiply_flat_ntt(&a_i, &s_squared, num_primes_key, ntt_contexts)?;
-
-            // Negate: -a_i · s^2
-            for i in 0..(n * num_primes_key) {
-                let prime_idx = i / n;
-                let q = self.params.moduli[prime_idx];
-                b_i[i] = if b_i[i] == 0 { 0 } else { q - b_i[i] };
+            // Convert secret key from strided to flat layout for NTT multiplication
+            let mut s_flat = vec![0u64; n * num_primes_key];
+            for coeff_idx in 0..n {
+                for prime_idx in 0..num_primes_key {
+                    let strided_idx = coeff_idx * num_primes_key + prime_idx;
+                    let flat_idx = prime_idx * n + coeff_idx;
+                    s_flat[flat_idx] = secret_key[strided_idx];
+                }
             }
 
+            // Compute a_i · s using GPU NTT (NOT a_i · s² - that was WRONG!)
+            // Standard CKKS EVK: evk0[t] = -a_t·s + e_t + B^t·s²
+            let mut b_i = self.gpu_multiply_flat_ntt(&a_i, &s_flat, num_primes_key, ntt_contexts)?;
+
             // Add error term e_i ~ Gaussian
+            // CRITICAL: Sample ONE error per coefficient, then reduce mod each prime
+            // (Matches Metal/CPU implementations)
             let e_i = self.generate_error_poly(num_primes_key);
             for i in 0..(n * num_primes_key) {
                 let prime_idx = i / n;
@@ -224,18 +244,31 @@ impl CudaRelinKeys {
                 b_i[i] = (b_i[i] + e_i[i]) % q;
             }
 
-            // Add w^i · s
-            let power_of_w = self.base_w.pow(digit_idx as u32);
+            // Add -B^t · s² (note: NEGATIVE, because EVK encodes -B^t·s²)
+            // This is the key difference from before: we use B^t (gadget power), not a_i
             for coeff_idx in 0..n {
                 for prime_idx in 0..num_primes_key {
                     let flat_idx = prime_idx * n + coeff_idx;
                     let strided_idx = coeff_idx * num_primes_key + prime_idx;
                     let q = self.params.moduli[prime_idx];
-                    let w_mod_q = (power_of_w % q) as u64;
-                    let s_val = secret_key[strided_idx];
-                    b_i[flat_idx] = (b_i[flat_idx] + w_mod_q * s_val) % q;
+
+                    // B^t · s² mod q (using precomputed B^t mod q)
+                    let bt_mod_q = bpow_t_mod_q[digit_idx][prime_idx];
+                    let s2_val = s_squared[flat_idx];  // s_squared is in flat layout
+                    let bt_s2 = ((bt_mod_q as u128 * s2_val as u128) % q as u128) as u64;
+
+                    // NEGATE: we want -B^t·s², so subtract from b_i
+                    b_i[flat_idx] = if b_i[flat_idx] >= bt_s2 {
+                        b_i[flat_idx] - bt_s2
+                    } else {
+                        q - (bt_s2 - b_i[flat_idx])
+                    };
                 }
             }
+
+            // Final: b_i = a_i·s + e_i - B^t·s²
+            // When we multiply digit d_t by b_i, we get: d_t·(a_i·s + e - B^t·s²)
+            // The d_t·B^t·s² term cancels out c2·s² when summed over all digits
 
             ks_components.push((b_i, a_i));
 
@@ -253,10 +286,12 @@ impl CudaRelinKeys {
         Ok(())
     }
 
-    /// Generate relinearization key for s^2 → s (CPU version - DEPRECATED)
+    /// Generate relinearization key for s^2 → s (CPU version - DEPRECATED and BUGGY!)
     ///
-    /// Use generate_relin_key_gpu() instead for much better performance
-    /// Generates: RelinKey = {(b_i, a_i)} where b_i = -a_i·s^2 + e_i + w^i·s
+    /// ⚠️ WARNING: This function has a bug - it uses a_i·s² instead of B^t·s²
+    /// Use generate_relin_key_gpu() instead which has the correct implementation
+    ///
+    /// Generates: RelinKey = {(b_i, a_i)} where b_i = -a_i·s^2 + e_i + w^i·s (WRONG!)
     fn generate_relin_key(&mut self, secret_key: &[u64]) -> Result<(), String> {
         let n = self.params.n;
         let num_primes_key = self.reducers_key.len();
@@ -432,7 +467,11 @@ impl CudaRelinKeys {
         let mut c0_acc = c0.to_vec();
         let mut c1_acc = c1.to_vec();
 
-        // Accumulate: c0' = c0 + Σ d_i · b_i, c1' = c1 + Σ d_i · a_i
+        // Apply relinearization: c0' = c0 - Σ d_i · b_i, c1' = c1 + Σ d_i · a_i
+        // CRITICAL FIX: EVK encodes b_i = a·s + e - B^t·s², so we SUBTRACT d·b from c0
+        // This gives: c0 - d·(a·s + e - B^t·s²) = c0 + d·B^t·s² - d·a·s - d·e
+        // Summing over digits reconstructs +c2·s², which cancels c2·s² from decryption
+        // (Matches Metal: line 2694 "c0 -= term0")
         for (digit_idx, d_i) in digits.iter().enumerate() {
             if digit_idx >= relin_key.ks_components.len() {
                 break;
@@ -445,8 +484,9 @@ impl CudaRelinKeys {
             // Multiply d_i · a_i using GPU NTT (BATCHED version)
             let d_a = self.gpu_multiply_flat_ntt_batched(d_i, a_i, num_primes, ckks_ctx)?;
 
-            // Accumulate using GPU kernel (MUCH faster than CPU loop)
-            c0_acc = ckks_ctx.add_polynomials_gpu(&c0_acc, &d_b, num_primes)?;
+            // c0 -= d·b (SUBTRACTION, not addition!)
+            c0_acc = ckks_ctx.subtract_polynomials_gpu(&c0_acc, &d_b, num_primes)?;
+            // c1 += d·a (addition)
             c1_acc = ckks_ctx.add_polynomials_gpu(&c1_acc, &d_a, num_primes)?;
         }
 
