@@ -14,66 +14,93 @@ extern "C" {
  * Uses Shoup's method: precompute and use floating-point for quotient estimation,
  * then do exact 128-bit arithmetic for the remainder.
  */
+/**
+ * Modular multiplication: (a * b) mod q
+ *
+ * Computes the exact 128-bit product and reduces it modulo q.
+ * Uses a divide-and-conquer approach that only requires 64-bit operations.
+ *
+ * Key insight: For 60-bit primes, the product a*b < 2^120.
+ * We split this as: a*b = hi * 2^64 + lo
+ * And compute: (hi * 2^64 + lo) mod q = ((hi mod q) * (2^64 mod q) + lo) mod q
+ *
+ * The tricky part is computing 2^64 mod q, but since q < 2^60,
+ * we have 2^64 mod q = (2^64 - k*q) for some small k.
+ * We can find this by: 2^64 mod q = 2^64 - floor(2^64/q) * q
+ *
+ * Since 2^64 doesn't fit in u64, we use: 2^64 mod q = (2^32)^2 mod q
+ */
 __device__ unsigned long long mul_mod(unsigned long long a, unsigned long long b, unsigned long long q) {
-    // Compute full 128-bit product
+    // Compute full 128-bit product: product = hi * 2^64 + lo
     unsigned long long lo = a * b;
     unsigned long long hi = __umul64hi(a, b);
 
-    // Fast path: if hi == 0, simple modulo
+    // Fast path: if hi == 0, product fits in 64 bits, use hardware modulo
     if (hi == 0) {
-        // Product fits in 64 bits
-        while (lo >= q) lo -= q;
-        return lo;
+        return lo % q;
     }
 
-    // Slow path: Compute (hi * 2^64 + lo) mod q
-    // Strategy: reduce hi first, then compute (hi_reduced * 2^64 + lo) mod q
+    // Compute 2^64 mod q
+    // Since q is ~60 bits, 2^32 < q typically, so 2^32 mod q = 2^32
+    // But (2^32)^2 = 2^64 > q, so we need to reduce
+    unsigned long long two_32 = 1ULL << 32;
+    unsigned long long two_32_mod_q = two_32 % q;  // Usually = 2^32 since q > 2^32
 
-    // Step 1: Reduce hi using native % (this is safe, hi < 2^64, q < 2^64)
-    unsigned long long hi_mod = hi % q;
+    // (2^32 mod q)^2 might overflow 64 bits, check
+    unsigned long long sq_lo = two_32_mod_q * two_32_mod_q;
+    unsigned long long sq_hi = __umul64hi(two_32_mod_q, two_32_mod_q);
 
-    // Step 2: Compute 2^64 mod q
-    // We can compute this by: (2^32 mod q)^2 mod q
-    unsigned long long pow2_32 = (1ULL << 32) % q;
-
-    // Compute pow2_32 * pow2_32 to get 2^64 mod q
-    unsigned long long pow2_64_lo = pow2_32 * pow2_32;
-    unsigned long long pow2_64_hi = __umul64hi(pow2_32, pow2_32);
-
-    unsigned long long pow2_64_mod_q;
-    if (pow2_64_hi == 0) {
-        pow2_64_mod_q = pow2_64_lo % q;
+    unsigned long long two_64_mod_q;
+    if (sq_hi == 0) {
+        two_64_mod_q = sq_lo % q;
     } else {
-        // Very unlikely for typical FHE primes, but handle it
-        // Use bit-by-bit for this one computation
-        pow2_64_mod_q = 0;
+        // Rare case: (2^32 mod q)^2 overflows. Use iterative doubling.
+        // Compute 2^64 mod q by doubling 64 times
+        two_64_mod_q = 1;
         for (int i = 0; i < 64; i++) {
-            pow2_64_mod_q = (pow2_64_mod_q * 2) % q;
+            two_64_mod_q <<= 1;
+            if (two_64_mod_q >= q) two_64_mod_q -= q;
         }
     }
 
-    // Step 3: Compute (hi_mod * pow2_64_mod_q) mod q
-    unsigned long long prod_lo = hi_mod * pow2_64_mod_q;
-    unsigned long long prod_hi = __umul64hi(hi_mod, pow2_64_mod_q);
+    // Now compute (hi mod q) * (2^64 mod q) mod q
+    unsigned long long hi_mod_q = hi % q;
+    unsigned long long prod_lo = hi_mod_q * two_64_mod_q;
+    unsigned long long prod_hi = __umul64hi(hi_mod_q, two_64_mod_q);
 
     unsigned long long hi_contribution;
     if (prod_hi == 0) {
         hi_contribution = prod_lo % q;
     } else {
-        // Use bit-by-bit reduction for this product
+        // Need to reduce 128-bit value. Use iterative method.
+        // This is rare since hi_mod_q < q < 2^60 and two_64_mod_q < q < 2^60
+        // so their product < 2^120, but typically < 2^64 since both are < 2^60
+        // and their product < 2^120 but usually fits in 64 bits
+
+        // Use bit-by-bit reduction as fallback
         hi_contribution = 0;
         for (int bit = 63; bit >= 0; bit--) {
-            hi_contribution = (hi_contribution * 2) % q;
-            if ((prod_hi >> bit) & 1ULL) hi_contribution = (hi_contribution + 1) % q;
+            hi_contribution <<= 1;
+            if (hi_contribution >= q) hi_contribution -= q;
+            if ((prod_hi >> bit) & 1ULL) {
+                hi_contribution += 1;
+                if (hi_contribution >= q) hi_contribution -= q;
+            }
         }
         for (int bit = 63; bit >= 0; bit--) {
-            hi_contribution = (hi_contribution * 2) % q;
-            if ((prod_lo >> bit) & 1ULL) hi_contribution = (hi_contribution + 1) % q;
+            hi_contribution <<= 1;
+            if (hi_contribution >= q) hi_contribution -= q;
+            if ((prod_lo >> bit) & 1ULL) {
+                hi_contribution += 1;
+                if (hi_contribution >= q) hi_contribution -= q;
+            }
         }
     }
 
-    // Step 4: Add lo and reduce
-    unsigned long long result = (hi_contribution + (lo % q)) % q;
+    // Final: (hi_contribution + lo mod q) mod q
+    unsigned long long lo_mod_q = lo % q;
+    unsigned long long result = hi_contribution + lo_mod_q;
+    if (result >= q) result -= q;
 
     return result;
 }
