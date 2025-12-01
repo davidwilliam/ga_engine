@@ -127,11 +127,11 @@ impl CudaNttContext {
 
         // Kernels already loaded during initialization - just get function handles
 
-        // Bit-reversal permutation
+        // Bit-reversal permutation (needs n threads, not n/2)
         let func_bit_reverse = self.device.device.get_func("ntt_module", "bit_reverse_permutation")
             .ok_or("Failed to get bit_reverse_permutation function")?;
 
-        let config = self.device.get_launch_config(self.n / 2);
+        let config = self.device.get_launch_config(self.n);
         unsafe {
             func_bit_reverse.launch(config, (&mut gpu_coeffs, self.n as u32, self.log_n as u32))
                 .map_err(|e| format!("Kernel launch failed: {:?}", e))?;
@@ -177,11 +177,11 @@ impl CudaNttContext {
 
         // Kernels already loaded during initialization - just get function handles
 
-        // Bit-reversal permutation (same as forward)
+        // Bit-reversal permutation (needs n threads, not n/2)
         let func_bit_reverse = self.device.device.get_func("ntt_module", "bit_reverse_permutation")
             .ok_or("Failed to get bit_reverse_permutation function")?;
 
-        let config = self.device.get_launch_config(self.n / 2);
+        let config = self.device.get_launch_config(self.n);
         unsafe {
             func_bit_reverse.launch(config, (&mut gpu_coeffs, self.n as u32, self.log_n as u32))
                 .map_err(|e| format!("Bit-reverse failed: {:?}", e))?;

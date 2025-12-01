@@ -96,6 +96,9 @@ __device__ unsigned long long sub_mod(unsigned long long a, unsigned long long b
 /**
  * Bit-reversal permutation
  * Required preprocessing step for NTT
+ *
+ * Each thread computes the bit-reversal of its index and swaps if needed.
+ * IMPORTANT: Must launch with n threads (not n/2)!
  */
 __global__ void bit_reverse_permutation(
     unsigned long long* coeffs,
@@ -104,7 +107,7 @@ __global__ void bit_reverse_permutation(
 ) {
     unsigned int gid = blockIdx.x * blockDim.x + threadIdx.x;
 
-    if (gid >= n / 2) return;
+    if (gid >= n) return;
 
     // Compute bit-reversed index
     unsigned int reversed = 0;
@@ -114,8 +117,8 @@ __global__ void bit_reverse_permutation(
         temp >>= 1;
     }
 
+    // Only swap if gid < reversed to avoid double-swapping
     if (gid < reversed) {
-        // Swap coeffs[gid] and coeffs[reversed]
         unsigned long long tmp = coeffs[gid];
         coeffs[gid] = coeffs[reversed];
         coeffs[reversed] = tmp;
@@ -125,6 +128,22 @@ __global__ void bit_reverse_permutation(
 /**
  * Forward NTT (Cooley-Tukey butterfly)
  * Transforms polynomial from coefficient to evaluation representation
+ *
+ * CPU algorithm reference:
+ *   for stage in 0..log_n:
+ *     m2 = m * 2
+ *     w_m = omega^(n/m2)  // twiddle factor for this stage
+ *     for k in (0..n step m2):
+ *       w = 1
+ *       for j in 0..m:
+ *         t = w * coeffs[k + j + m]
+ *         u = coeffs[k + j]
+ *         coeffs[k + j] = u + t
+ *         coeffs[k + j + m] = u - t
+ *         w = w * w_m
+ *     m = m2
+ *
+ * So twiddle factor for position j in stage is: omega^((n/m2) * j) = twiddles[(n/m2) * j]
  */
 __global__ void ntt_forward(
     unsigned long long* coeffs,
@@ -147,13 +166,15 @@ __global__ void ntt_forward(
     unsigned int idx1 = k * m2 + j;
     unsigned int idx2 = idx1 + m;
 
-    // FIXED: Correct twiddle indexing
     // w = omega^((n/m2) * j) = twiddles[(n/m2) * j]
+    // Example: n=8, stage 0 (m=1): w_m = omega^4, w[0] = omega^0, w[1] = omega^4 (but m=1, so only j=0)
+    // Example: n=8, stage 1 (m=2): w_m = omega^2, w[0] = omega^0, w[1] = omega^2
+    // Example: n=8, stage 2 (m=4): w_m = omega^1, w[0] = omega^0, w[1] = omega^1, w[2] = omega^2, w[3] = omega^3
     unsigned int twiddle_stride = n / m2;
-    unsigned int twiddle_idx = (twiddle_stride * j) % n;
+    unsigned int twiddle_idx = twiddle_stride * j;  // No modulo needed, j < m < n
     unsigned long long w = twiddles[twiddle_idx];
 
-    // Cooley-Tukey butterfly
+    // Cooley-Tukey butterfly: (u, v) -> (u + w*v, u - w*v)
     unsigned long long u = coeffs[idx1];
     unsigned long long t = mul_mod(w, coeffs[idx2], q);
 
@@ -162,8 +183,11 @@ __global__ void ntt_forward(
 }
 
 /**
- * Inverse NTT (Gentleman-Sande butterfly)
+ * Inverse NTT (Same Cooley-Tukey butterfly with omega_inv)
  * Transforms polynomial from evaluation to coefficient representation
+ *
+ * The CPU uses the same Cooley-Tukey DIT structure for inverse, just with omega_inv instead of omega.
+ * After the transform, we scale by n^(-1) to complete the inverse.
  */
 __global__ void ntt_inverse(
     unsigned long long* coeffs,
@@ -186,12 +210,12 @@ __global__ void ntt_inverse(
     unsigned int idx1 = k * m2 + j;
     unsigned int idx2 = idx1 + m;
 
-    // FIXED: Correct twiddle indexing (same formula as forward, but with omega_inv twiddles)
+    // Same twiddle indexing as forward, but with omega_inv twiddles
     unsigned int twiddle_stride = n / m2;
-    unsigned int twiddle_idx = (twiddle_stride * j) % n;
+    unsigned int twiddle_idx = twiddle_stride * j;  // No modulo needed
     unsigned long long w = twiddles_inv[twiddle_idx];
 
-    // Same Cooley-Tukey butterfly as forward (CPU does this for inverse too)
+    // Cooley-Tukey butterfly: (u, v) -> (u + w*v, u - w*v)
     unsigned long long u = coeffs[idx1];
     unsigned long long t = mul_mod(w, coeffs[idx2], q);
 
