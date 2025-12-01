@@ -40,6 +40,7 @@ impl CudaNttContext {
             "bit_reverse_permutation",
             "ntt_forward",
             "ntt_inverse",
+            "ntt_inverse_final",
             "ntt_scalar_multiply",
             "ntt_pointwise_multiply",
             "ntt_forward_batched",
@@ -168,14 +169,17 @@ impl CudaNttContext {
         Ok(())
     }
 
-    /// Inverse NTT on GPU
+    /// Inverse NTT on GPU (Gentleman-Sande DIF algorithm, matching Metal)
+    ///
+    /// Uses the same algorithm as the working Metal implementation:
+    /// 1. NO bit-reversal at the start
+    /// 2. Butterfly stages run in REVERSE order (log_n-1 down to 0)
+    /// 3. Gentleman-Sande DIF butterfly: (u, v) -> (u + v, (u - v) * w)
+    /// 4. Bit-reversal + scaling by n^(-1) at the END
     pub fn inverse(&self, coeffs: &mut [u64]) -> Result<(), String> {
         if coeffs.len() != self.n {
             return Err(format!("Expected {} coefficients, got {}", self.n, coeffs.len()));
         }
-
-        // Similar to forward, but using ntt_inverse kernel and final scaling
-        // Implementation follows same pattern as forward()
 
         // Copy to GPU
         let mut gpu_coeffs = self.device.device.htod_copy(coeffs.to_vec())
@@ -184,28 +188,13 @@ impl CudaNttContext {
         let gpu_twiddles_inv = self.device.device.htod_copy(self.twiddles_inv.clone())
             .map_err(|e| format!("Failed to copy twiddles: {:?}", e))?;
 
-        // Kernels already loaded during initialization - just get function handles
-
-        // Bit-reversal permutation (needs n threads, not n/2)
-        let func_bit_reverse = self.device.device.get_func("ntt_module", "bit_reverse_permutation")
-            .ok_or("Failed to get bit_reverse_permutation function")?;
-
-        let config = self.device.get_launch_config(self.n);
-        unsafe {
-            func_bit_reverse.launch(config, (&mut gpu_coeffs, self.n as u32, self.log_n as u32))
-                .map_err(|e| format!("Bit-reverse failed: {:?}", e))?;
-        }
-
-        // Synchronize after bit-reversal
-        self.device.device.synchronize()
-            .map_err(|e| format!("Sync after bit-reverse failed: {:?}", e))?;
-
-        // Inverse NTT stages (SAME ORDER as forward, just with omega_inv twiddles)
-        let mut m = 1usize;
-        for stage in 0..self.log_n {
+        // Step 1: Inverse NTT butterfly stages in REVERSE order (log_n-1 down to 0)
+        // This matches Metal's `for stage in (0..log_n).rev()`
+        for stage in (0..self.log_n).rev() {
             let func_ntt_inv = self.device.device.get_func("ntt_module", "ntt_inverse")
                 .ok_or("Failed to get ntt_inverse function")?;
 
+            let m = 1usize << (stage + 1);  // m = 2^(stage+1), matching Metal
             let config = self.device.get_launch_config(self.n / 2);
             unsafe {
                 func_ntt_inv.launch(config, (&mut gpu_coeffs, &gpu_twiddles_inv, self.n as u32, self.q, stage as u32, m as u32))
@@ -215,18 +204,16 @@ impl CudaNttContext {
             // Synchronize after each stage to ensure correct ordering
             self.device.device.synchronize()
                 .map_err(|e| format!("Sync after stage {} failed: {:?}", stage, e))?;
-
-            m *= 2;
         }
 
-        // Final scaling by n^(-1)
-        let func_scalar = self.device.device.get_func("ntt_module", "ntt_scalar_multiply")
-            .ok_or("Failed to get ntt_scalar_multiply function")?;
+        // Step 2: Bit-reversal + scaling by n^(-1) at the END
+        let func_final = self.device.device.get_func("ntt_module", "ntt_inverse_final")
+            .ok_or("Failed to get ntt_inverse_final function")?;
 
         let config = self.device.get_launch_config(self.n);
         unsafe {
-            func_scalar.launch(config, (&mut gpu_coeffs, self.n_inv, self.n as u32, self.q))
-                .map_err(|e| format!("Scalar multiply failed: {:?}", e))?;
+            func_final.launch(config, (&mut gpu_coeffs, self.n as u32, self.log_n as u32, self.q, self.n_inv))
+                .map_err(|e| format!("Inverse NTT final step failed: {:?}", e))?;
         }
 
         // Copy result back (dtoh_sync_copy already synchronizes)

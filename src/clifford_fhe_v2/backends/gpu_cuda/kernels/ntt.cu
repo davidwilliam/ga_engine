@@ -183,11 +183,16 @@ __global__ void ntt_forward(
 }
 
 /**
- * Inverse NTT (Same Cooley-Tukey butterfly with omega_inv)
+ * Inverse NTT (Gentleman-Sande DIF butterfly)
  * Transforms polynomial from evaluation to coefficient representation
  *
- * The CPU uses the same Cooley-Tukey DIT structure for inverse, just with omega_inv instead of omega.
- * After the transform, we scale by n^(-1) to complete the inverse.
+ * This uses the same algorithm as Metal (which works correctly):
+ * - Stages run in REVERSE order (log_n-1 down to 0)
+ * - Different butterfly formula: (u, v) -> (u + v, (u - v) * w)
+ * - Bit-reversal happens at the END (not the beginning)
+ *
+ * The stage parameter here represents the same stage value as Metal,
+ * so the Rust code must call stages in reverse order: log_n-1, log_n-2, ..., 0
  */
 __global__ void ntt_inverse(
     unsigned long long* coeffs,
@@ -195,32 +200,69 @@ __global__ void ntt_inverse(
     unsigned int n,
     unsigned long long q,
     unsigned int stage,
-    unsigned int m
+    unsigned int m  // m = 1 << (stage + 1), passed from Rust for consistency
 ) {
     unsigned int gid = blockIdx.x * blockDim.x + threadIdx.x;
     unsigned int total_butterflies = n / 2;
 
     if (gid >= total_butterflies) return;
 
-    // Butterfly indices (same as forward - CPU uses same Cooley-Tukey for both)
-    unsigned int m2 = m * 2;
-    unsigned int k = gid / m;
-    unsigned int j = gid % m;
+    // Butterfly indices (same indexing as Metal's ntt_inverse_stage)
+    unsigned int m_half = 1 << stage;  // m_half = m / 2
+    unsigned int m2 = m_half * 2;      // m2 = m = 1 << (stage + 1)
 
-    unsigned int idx1 = k * m2 + j;
-    unsigned int idx2 = idx1 + m;
+    unsigned int block_idx = gid / m_half;
+    unsigned int idx_in_block = gid % m_half;
 
-    // Same twiddle indexing as forward, but with omega_inv twiddles
-    unsigned int twiddle_stride = n / m2;
-    unsigned int twiddle_idx = twiddle_stride * j;  // No modulo needed
-    unsigned long long w = twiddles_inv[twiddle_idx];
+    unsigned int i = block_idx * m2 + idx_in_block;
+    unsigned int j = i + m_half;
 
-    // Cooley-Tukey butterfly: (u, v) -> (u + w*v, u - w*v)
-    unsigned long long u = coeffs[idx1];
-    unsigned long long t = mul_mod(w, coeffs[idx2], q);
+    // Twiddle index: (n / m) * idx_in_block where m = 1 << (stage + 1)
+    unsigned int twiddle_idx = (n / m2) * idx_in_block;
+    unsigned long long omega_inv = twiddles_inv[twiddle_idx];
 
-    coeffs[idx1] = add_mod(u, t, q);
-    coeffs[idx2] = sub_mod(u, t, q);
+    // Gentleman-Sande (DIF) butterfly: (u, v) -> (u + v, (u - v) * w)
+    unsigned long long u = coeffs[i];
+    unsigned long long v = coeffs[j];
+
+    coeffs[i] = add_mod(u, v, q);
+    coeffs[j] = mul_mod(sub_mod(u, v, q), omega_inv, q);
+}
+
+/**
+ * Final step of inverse NTT: bit-reversal permutation + scaling by n^(-1)
+ *
+ * This is performed AFTER all inverse butterfly stages complete.
+ * Combines bit-reversal and scaling into one kernel for efficiency.
+ */
+__global__ void ntt_inverse_final(
+    unsigned long long* coeffs,
+    unsigned int n,
+    unsigned int log_n,
+    unsigned long long q,
+    unsigned long long n_inv
+) {
+    unsigned int gid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (gid >= n) return;
+
+    // Compute bit-reversed index
+    unsigned int reversed = 0;
+    unsigned int temp = gid;
+    for (unsigned int i = 0; i < log_n; i++) {
+        reversed = (reversed << 1) | (temp & 1);
+        temp >>= 1;
+    }
+
+    // Only swap if gid <= reversed to avoid double-swapping
+    // Also scale by n_inv during the swap
+    if (gid <= reversed) {
+        unsigned long long val_gid = mul_mod(coeffs[gid], n_inv, q);
+        unsigned long long val_rev = mul_mod(coeffs[reversed], n_inv, q);
+
+        coeffs[gid] = val_rev;
+        coeffs[reversed] = val_gid;
+    }
 }
 
 /**
