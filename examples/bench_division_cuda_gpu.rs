@@ -8,7 +8,7 @@
 //! cargo run --release --features v2,v2-gpu-cuda --example bench_division_cuda_gpu
 //! ```
 //!
-//! **Requirements**:
+//! Requirements:
 //! - NVIDIA GPU with CUDA support (Compute Capability 7.0+)
 //! - CUDA Toolkit 11.0+ (12.0 recommended)
 //! - For RunPod: RTX 5090, RTX 4090, or A100 instance
@@ -32,6 +32,24 @@ use std::sync::Arc;
 #[cfg(all(feature = "v2", feature = "v2-gpu-cuda"))]
 use std::time::Instant;
 
+/// Convert CPU SecretKey (RNS representation) to CUDA strided format
+#[cfg(all(feature = "v2", feature = "v2-gpu-cuda"))]
+fn secret_key_to_strided(
+    sk: &ga_engine::clifford_fhe_v2::backends::cpu_optimized::keys::SecretKey,
+    num_primes: usize,
+) -> Vec<u64> {
+    let n = sk.n;
+    let mut strided = vec![0u64; n * num_primes];
+
+    for coeff_idx in 0..n {
+        for prime_idx in 0..num_primes {
+            strided[coeff_idx * num_primes + prime_idx] = sk.coeffs[coeff_idx].values[prime_idx];
+        }
+    }
+
+    strided
+}
+
 #[cfg(all(feature = "v2", feature = "v2-gpu-cuda"))]
 fn main() -> Result<(), String> {
     println!("╔════════════════════════════════════════════════════════════════════════╗");
@@ -49,9 +67,12 @@ fn main() -> Result<(), String> {
     // Setup FHE parameters (use N=4096 for enough depth)
     println!("Step 2: Setting up FHE parameters...");
     let params = CliffordFHEParams::new_test_ntt_4096();  // 7 primes = max level 6
+    let num_primes = params.moduli.len();
+    let max_level = num_primes - 1;
+    let scale = params.scale;
     println!("  Ring dimension (N): {}", params.n);
-    println!("  Number of primes: {} (max level: {})", params.moduli.len(), params.moduli.len() - 1);
-    println!("  Scale: 2^{}", (params.scale.log2() as u32));
+    println!("  Number of primes: {} (max level: {})", num_primes, max_level);
+    println!("  Scale: 2^{}", (scale.log2() as u32));
     println!("  Depth required: 2 NR iterations (4 levels) + 1 final mult = 5 levels");
     println!();
 
@@ -66,9 +87,12 @@ fn main() -> Result<(), String> {
     // Create CUDA CKKS context
     println!("Step 4: Initializing CUDA CKKS context...");
     let ctx_start = Instant::now();
-    let ctx = CudaCkksContext::new(device.clone(), params.clone())?;
+    let ctx = CudaCkksContext::new(params.clone())?;
     println!("  CUDA CKKS context ready: {:.2}ms", ctx_start.elapsed().as_secs_f64() * 1000.0);
     println!();
+
+    // Convert secret key to CUDA strided format
+    let sk_strided = secret_key_to_strided(&sk, num_primes);
 
     // Generate relinearization keys for CUDA
     println!("Step 5: Generating CUDA relinearization keys...");
@@ -76,7 +100,7 @@ fn main() -> Result<(), String> {
     let relin_keys = CudaRelinKeys::new_gpu(
         device.clone(),
         params.clone(),
-        sk.poly.clone(),
+        sk_strided,
         16, // base_bits
         ctx.ntt_contexts(),
     )?;
@@ -84,7 +108,7 @@ fn main() -> Result<(), String> {
     println!();
 
     // Test cases: (numerator, denominator, iterations, expected_accuracy)
-    // Note: Using 2 iterations to fit within depth budget (2 iter * 2 levels + 1 final = 5 levels)
+    // Using 2 iterations to fit within depth budget (2 iter * 2 levels + 1 final = 5 levels)
     let test_cases = vec![
         (100.0, 7.0, 2, "10^-3"),
         (1000.0, 13.0, 2, "10^-3"),
@@ -103,14 +127,14 @@ fn main() -> Result<(), String> {
         println!("Test: {:.1} / {:.1} = {:.10} (k={} iterations)", num, denom, num/denom, iterations);
         println!("─────────────────────────────────────────────────────────────────────────");
 
-        // Encode and encrypt numerator
-        let pt_num = ctx.encode(&[num])?;
+        // Encode and encrypt numerator at max level
+        let pt_num = ctx.encode(&[num], scale, max_level)?;
         let encrypt_start = Instant::now();
         let ct_num = ctx.encrypt(&pt_num, &pk)?;
         let encrypt_time_num = encrypt_start.elapsed();
 
-        // Encode and encrypt denominator
-        let pt_denom = ctx.encode(&[denom])?;
+        // Encode and encrypt denominator at max level
+        let pt_denom = ctx.encode(&[denom], scale, max_level)?;
         let encrypt_start = Instant::now();
         let ct_denom = ctx.encrypt(&pt_denom, &pk)?;
         let encrypt_time_denom = encrypt_start.elapsed();

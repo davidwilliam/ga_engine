@@ -5,12 +5,12 @@
 //! - Newton-Raphson inverse computation
 //! - Full homomorphic division (a/b)
 //!
-//! **Run on RunPod.io with NVIDIA GPU:**
+//! Run on RunPod.io with NVIDIA GPU:
 //! ```bash
 //! cargo run --release --features v2,v2-gpu-cuda --example test_cuda_division_runpod
 //! ```
 //!
-//! **Requirements:**
+//! Requirements:
 //! - NVIDIA GPU with CUDA support (Compute Capability 7.0+)
 //! - CUDA Toolkit 11.0+ (12.0 recommended)
 //! - Recommended: RTX 5090, RTX 4090, or A100
@@ -34,6 +34,24 @@ use std::sync::Arc;
 #[cfg(all(feature = "v2", feature = "v2-gpu-cuda"))]
 use std::time::Instant;
 
+/// Convert CPU SecretKey (RNS representation) to CUDA strided format
+#[cfg(all(feature = "v2", feature = "v2-gpu-cuda"))]
+fn secret_key_to_strided(
+    sk: &ga_engine::clifford_fhe_v2::backends::cpu_optimized::keys::SecretKey,
+    num_primes: usize,
+) -> Vec<u64> {
+    let n = sk.n;
+    let mut strided = vec![0u64; n * num_primes];
+
+    for coeff_idx in 0..n {
+        for prime_idx in 0..num_primes {
+            strided[coeff_idx * num_primes + prime_idx] = sk.coeffs[coeff_idx].values[prime_idx];
+        }
+    }
+
+    strided
+}
+
 #[cfg(all(feature = "v2", feature = "v2-gpu-cuda"))]
 fn main() -> Result<(), String> {
     println!("╔════════════════════════════════════════════════════════════════════════╗");
@@ -50,9 +68,12 @@ fn main() -> Result<(), String> {
     // Step 2: Initialize parameters (use N=4096 for 7 primes = depth 6)
     println!("Step 2: Initializing FHE parameters...");
     let params = CliffordFHEParams::new_test_ntt_4096();
+    let num_primes = params.moduli.len();
+    let max_level = num_primes - 1;
+    let scale = params.scale;
     println!("  Parameters: N={}, {} primes (max level {})",
-             params.n, params.moduli.len(), params.moduli.len() - 1);
-    println!("  Scale: 2^{}", (params.scale.log2() as u32));
+             params.n, num_primes, max_level);
+    println!("  Scale: 2^{}", (scale.log2() as u32));
     println!();
 
     // Step 3: Generate keys
@@ -67,10 +88,13 @@ fn main() -> Result<(), String> {
     // Step 4: Initialize CUDA context
     println!("Step 4: Initializing CUDA CKKS context...");
     let start = Instant::now();
-    let ctx = CudaCkksContext::new(device.clone(), params.clone())?;
+    let ctx = CudaCkksContext::new(params.clone())?;
     let init_time = start.elapsed();
     println!("  CUDA context ready in {:.2}ms", init_time.as_secs_f64() * 1000.0);
     println!();
+
+    // Convert secret key to CUDA strided format
+    let sk_strided = secret_key_to_strided(&sk, num_primes);
 
     // Step 5: Generate relinearization keys
     println!("Step 5: Generating CUDA relinearization keys...");
@@ -78,7 +102,7 @@ fn main() -> Result<(), String> {
     let relin_keys = CudaRelinKeys::new_gpu(
         device.clone(),
         params.clone(),
-        sk.poly.clone(),
+        sk_strided,
         16, // base_bits
         ctx.ntt_contexts(),
     )?;
@@ -100,8 +124,8 @@ fn main() -> Result<(), String> {
 
     // Encode and encrypt
     println!("  Encoding and encrypting...");
-    let pt_a = ctx.encode(&[a])?;
-    let pt_b = ctx.encode(&[b])?;
+    let pt_a = ctx.encode(&[a], scale, max_level)?;
+    let pt_b = ctx.encode(&[b], scale, max_level)?;
 
     let ct_a = ctx.encrypt(&pt_a, &pk)?;
     let ct_b = ctx.encrypt(&pt_b, &pk)?;
@@ -133,7 +157,7 @@ fn main() -> Result<(), String> {
     println!("  Rel. Error:   {:.2e}", rel_error);
 
     if rel_error < 1e-4 {
-        println!("  PASS - Multiplication working correctly!");
+        println!("  PASS - Multiplication working correctly");
     } else {
         println!("  FAIL - Error too large");
         return Err(format!("Multiplication test failed: error = {:.2e}", error));
@@ -154,7 +178,7 @@ fn main() -> Result<(), String> {
     println!();
 
     // Encode and encrypt
-    let pt_x = ctx.encode(&[x])?;
+    let pt_x = ctx.encode(&[x], scale, max_level)?;
     let ct_x = ctx.encrypt(&pt_x, &pk)?;
     println!("  Encrypted input at level {}", ct_x.level);
     println!();
@@ -183,7 +207,7 @@ fn main() -> Result<(), String> {
     println!("  Rel. Error:   {:.2e}", rel_error_inv);
 
     if rel_error_inv < 1e-2 {
-        println!("  PASS - Inverse computation working!");
+        println!("  PASS - Inverse computation working");
     } else {
         println!("  FAIL - Error too large");
         return Err(format!("Inverse test failed: error = {:.2e}", error_inv));
@@ -205,8 +229,8 @@ fn main() -> Result<(), String> {
     println!();
 
     // Encode and encrypt
-    let pt_num = ctx.encode(&[numerator])?;
-    let pt_den = ctx.encode(&[denominator])?;
+    let pt_num = ctx.encode(&[numerator], scale, max_level)?;
+    let pt_den = ctx.encode(&[denominator], scale, max_level)?;
 
     let ct_num = ctx.encrypt(&pt_num, &pk)?;
     let ct_den = ctx.encrypt(&pt_den, &pk)?;
@@ -236,7 +260,7 @@ fn main() -> Result<(), String> {
     println!("  Rel. Error:   {:.2e}", rel_error_div);
 
     if rel_error_div < 1e-2 {
-        println!("  PASS - Division working correctly!");
+        println!("  PASS - Division working correctly");
     } else {
         println!("  FAIL - Error too large");
         return Err(format!("Division test failed: error = {:.2e}", error_div));
