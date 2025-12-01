@@ -2102,18 +2102,26 @@ impl CudaCkksContext {
 
     /// NTT-based polynomial multiplication for negacyclic ring
     ///
-    /// Uses CPU NTT contexts (which include proper negacyclic twisting)
-    /// instead of CUDA NTT (which only does cyclic convolution).
+    /// CRITICAL: Uses the SAME psi values stored in self.psi_per_prime that were
+    /// used during encryption. This ensures consistent twist/untwist between
+    /// encrypt (multiply_flat_rns) and decrypt (this function).
+    ///
+    /// Previously this function created new CPU NTT contexts which could find
+    /// DIFFERENT primitive roots, causing encryption/decryption to fail!
     fn multiply_polys_ntt(&self, a: &[u64], b: &[u64], num_primes: usize) -> Result<Vec<u64>, String> {
         let n = self.params.n;
         let mut result = vec![0u64; n * num_primes];
 
-        // For each RNS prime, use CPU NTT multiplication (has negacyclic twisting)
+        // For each RNS prime, perform negacyclic multiplication using the SAME
+        // psi values that were used during encryption
         for prime_idx in 0..num_primes {
             let q = self.params.moduli[prime_idx];
+            let ntt_ctx = &self.ntt_contexts[prime_idx];
 
-            // Create CPU NTT context for this prime (includes negacyclic support)
-            let ntt_ctx = crate::clifford_fhe_v2::backends::cpu_optimized::ntt::NttContext::new(n, q);
+            // Use the SAME psi that was stored during context creation
+            // CRITICAL: This must match what multiply_flat_rns uses in encrypt!
+            let psi = self.psi_per_prime[prime_idx];
+            let psi_inv = self.psi_inv_per_prime[prime_idx];
 
             // Extract polynomials for this prime (strided layout)
             let mut p1 = vec![0u64; n];
@@ -2127,6 +2135,7 @@ impl CudaCkksContext {
             if std::env::var("NTT_DEBUG").is_ok() && prime_idx == 0 {
                 println!("[NTT_DEBUG] modulus q={}", q);
                 println!("[NTT_DEBUG] n={}", n);
+                println!("[NTT_DEBUG] psi={}, psi_inv={}", psi, psi_inv);
                 println!("[NTT_DEBUG] Before multiply: p1[0]={}, p1[1]={}, p2[0]={}, p2[1]={}",
                     p1[0], p1[1], p2[0], p2[1]);
 
@@ -2143,8 +2152,25 @@ impl CudaCkksContext {
                     ones, neg_ones, zeros, others);
             }
 
-            // Multiply using CPU NTT (includes negacyclic twisting/untwisting)
-            let product = ntt_ctx.multiply_polynomials(&p1, &p2);
+            // TWIST: Multiply by psi^i to convert to negacyclic (same as multiply_flat_rns)
+            Self::apply_psi_powers(&mut p1, psi, q);
+            Self::apply_psi_powers(&mut p2, psi, q);
+
+            // Forward NTT (cyclic)
+            ntt_ctx.forward(&mut p1)?;
+            ntt_ctx.forward(&mut p2)?;
+
+            // Pointwise multiplication in NTT domain
+            let mut product = vec![0u64; n];
+            for i in 0..n {
+                product[i] = ((p1[i] as u128 * p2[i] as u128) % q as u128) as u64;
+            }
+
+            // Inverse NTT (cyclic)
+            ntt_ctx.inverse(&mut product)?;
+
+            // UNTWIST: Multiply by psi^{-i} to get final negacyclic result
+            Self::apply_psi_powers(&mut product, psi_inv, q);
 
             if std::env::var("NTT_DEBUG").is_ok() && prime_idx == 0 {
                 println!("[NTT_DEBUG] After multiply: product[0]={}, product[1]={}", product[0], product[1]);
