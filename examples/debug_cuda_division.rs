@@ -118,6 +118,17 @@ fn main() -> Result<(), String> {
         let ntt_ctx = &ctx.ntt_contexts()[0];
         let n = params.n;
 
+        // Debug: Print twiddle factors
+        println!("  DEBUG: Twiddles[0..4] = {:?}", &ntt_ctx.twiddles[0..4]);
+        println!("  DEBUG: Twiddles_inv[0..4] = {:?}", &ntt_ctx.twiddles_inv[0..4]);
+        println!("  DEBUG: n_inv = {}", ntt_ctx.n_inv);
+
+        // Verify omega * omega_inv = 1
+        let omega = ntt_ctx.twiddles[1];  // omega^1
+        let omega_inv = ntt_ctx.twiddles_inv[1];  // omega^{-1}
+        let product = ((omega as u128 * omega_inv as u128) % params.moduli[0] as u128) as u64;
+        println!("  DEBUG: omega * omega_inv = {} (should be 1)", product);
+
         // Create a simple test polynomial: [1, 2, 3, 4, 0, 0, ...]
         let mut test_poly: Vec<u64> = vec![0; n];
         test_poly[0] = 1;
@@ -128,6 +139,7 @@ fn main() -> Result<(), String> {
 
         // Forward NTT
         ntt_ctx.forward(&mut test_poly)?;
+        let after_forward = test_poly.clone();
         println!("  After forward NTT: [0]={}, [1]={}, [2]={}, [3]={}",
             test_poly[0], test_poly[1], test_poly[2], test_poly[3]);
 
@@ -135,6 +147,13 @@ fn main() -> Result<(), String> {
         ntt_ctx.inverse(&mut test_poly)?;
         println!("  After inverse NTT: [0]={}, [1]={}, [2]={}, [3]={}",
             test_poly[0], test_poly[1], test_poly[2], test_poly[3]);
+
+        // Debug: Try applying forward NTT again to the inverse result
+        // If inverse is broken, forward(inverse(x)) != x
+        let mut test_poly2 = after_forward.clone();
+        ntt_ctx.inverse(&mut test_poly2)?;
+        println!("  Second inverse attempt: [0]={}, [1]={}, [2]={}, [3]={}",
+            test_poly2[0], test_poly2[1], test_poly2[2], test_poly2[3]);
 
         // Check roundtrip
         let mut all_match = true;
