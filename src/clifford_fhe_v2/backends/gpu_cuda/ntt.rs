@@ -137,6 +137,10 @@ impl CudaNttContext {
                 .map_err(|e| format!("Kernel launch failed: {:?}", e))?;
         }
 
+        // Synchronize after bit-reversal
+        self.device.device.synchronize()
+            .map_err(|e| format!("Sync after bit-reverse failed: {:?}", e))?;
+
         // NTT stages
         let mut m = 1usize;
         for stage in 0..self.log_n {
@@ -148,10 +152,15 @@ impl CudaNttContext {
                 func_ntt.launch(config, (&mut gpu_coeffs, &gpu_twiddles, self.n as u32, self.q, stage as u32, m as u32))
                     .map_err(|e| format!("NTT stage {} failed: {:?}", stage, e))?;
             }
+
+            // Synchronize after each stage to ensure correct ordering
+            self.device.device.synchronize()
+                .map_err(|e| format!("Sync after stage {} failed: {:?}", stage, e))?;
+
             m *= 2;
         }
 
-        // Copy result back
+        // Copy result back (dtoh_sync_copy already synchronizes)
         let result = self.device.device.dtoh_sync_copy(&gpu_coeffs)
             .map_err(|e| format!("Failed to copy from GPU: {:?}", e))?;
 
@@ -187,6 +196,10 @@ impl CudaNttContext {
                 .map_err(|e| format!("Bit-reverse failed: {:?}", e))?;
         }
 
+        // Synchronize after bit-reversal
+        self.device.device.synchronize()
+            .map_err(|e| format!("Sync after bit-reverse failed: {:?}", e))?;
+
         // Inverse NTT stages (SAME ORDER as forward, just with omega_inv twiddles)
         let mut m = 1usize;
         for stage in 0..self.log_n {
@@ -198,6 +211,11 @@ impl CudaNttContext {
                 func_ntt_inv.launch(config, (&mut gpu_coeffs, &gpu_twiddles_inv, self.n as u32, self.q, stage as u32, m as u32))
                     .map_err(|e| format!("Inverse NTT stage {} failed: {:?}", stage, e))?;
             }
+
+            // Synchronize after each stage to ensure correct ordering
+            self.device.device.synchronize()
+                .map_err(|e| format!("Sync after stage {} failed: {:?}", stage, e))?;
+
             m *= 2;
         }
 
@@ -211,7 +229,7 @@ impl CudaNttContext {
                 .map_err(|e| format!("Scalar multiply failed: {:?}", e))?;
         }
 
-        // Copy result back
+        // Copy result back (dtoh_sync_copy already synchronizes)
         let result = self.device.device.dtoh_sync_copy(&gpu_coeffs)
             .map_err(|e| format!("Failed to copy from GPU: {:?}", e))?;
 
