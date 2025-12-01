@@ -69,7 +69,9 @@ pub fn multiply_ciphertexts_gpu(
     let (c0, c1, c2) = ctx.multiply_ciphertexts_tensored(ct1, ct2)?;
 
     // Step 2: Relinearization (c0, c1, c2) → (c0', c1')
-    let (c0_relin, c1_relin) = relin_keys.apply_relinearization_gpu(
+    // Note: c0, c1, c2 are in FLAT layout from multiply_ciphertexts_tensored
+    // apply_relinearization_gpu returns results in FLAT layout
+    let (c0_relin_flat, c1_relin_flat) = relin_keys.apply_relinearization_gpu(
         &c0,
         &c1,
         &c2,
@@ -78,7 +80,14 @@ pub fn multiply_ciphertexts_gpu(
         ctx,
     )?;
 
-    // Step 3: Create intermediate ciphertext with doubled scale
+    // Step 3: Convert from flat layout back to strided layout
+    // CRITICAL: CudaCiphertext expects strided layout: c[coeff_idx * num_primes + prime_idx]
+    // But relinearization returns flat layout: c[prime_idx * n + coeff_idx]
+    let num_active_primes = ct1.level + 1;
+    let c0_relin = ctx.flat_to_strided(&c0_relin_flat, ct1.n, ct1.num_primes, num_active_primes);
+    let c1_relin = ctx.flat_to_strided(&c1_relin_flat, ct1.n, ct1.num_primes, num_active_primes);
+
+    // Step 4: Create intermediate ciphertext with doubled scale
     let result_scale = ct1.scale * ct2.scale;
     let ct_product = CudaCiphertext {
         c0: c0_relin,
