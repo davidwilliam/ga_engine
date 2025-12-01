@@ -1,10 +1,6 @@
 # Documentation Guide
 
-**Last Updated**: November 22, 2025
-
 This guide helps you navigate the Clifford FHE documentation.
-
----
 
 ## Quick Reference
 
@@ -28,8 +24,6 @@ Optimize your usage:
 1. **[BENCHMARKS.md](BENCHMARKS.md)** - Performance data and comparisons
 2. **[COMMANDS.md](COMMANDS.md)** - Common build and run commands
 
----
-
 ## Documentation Structure
 
 ### Core Documentation
@@ -42,7 +36,7 @@ Optimize your usage:
   - Feature highlights
   - Basic usage examples
 
-- **[CLIFFORD_FHE_VERSIONS.md](CLIFFORD_FHE_VERSIONS.md)** ⭐
+- **[CLIFFORD_FHE_VERSIONS.md](CLIFFORD_FHE_VERSIONS.md)**
   - Complete technical history
   - V1: Proof of concept
   - V2: Production CKKS backend
@@ -88,8 +82,6 @@ Optimize your usage:
   - Version selection
   - Optimization flags
 
----
-
 ## Documentation by Task
 
 ### "I want to understand what Clifford FHE is"
@@ -131,35 +123,31 @@ Optimize your usage:
 2. [INSTALLATION.md](INSTALLATION.md) - Troubleshooting section
 3. GitHub Issues
 
----
-
 ## Key Concepts Explained
 
 ### What is Clifford Algebra?
 
 **See**: [CLIFFORD_FHE_VERSIONS.md](CLIFFORD_FHE_VERSIONS.md) - Theoretical Constructions section
 
-**TL;DR**: Geometric algebra with 8 basis elements (1, e₁, e₂, e₁₂, e₃, e₁₃, e₂₃, e₁₂₃)
+**Summary**: Geometric algebra with 8 basis elements (1, e₁, e₂, e₁₂, e₃, e₁₃, e₂₃, e₁₂₃)
 
 ### What is CKKS?
 
 **See**: [CLIFFORD_FHE_VERSIONS.md](CLIFFORD_FHE_VERSIONS.md) - Version 2 section
 
-**TL;DR**: Homomorphic encryption for approximate arithmetic on encrypted data
+**Summary**: Homomorphic encryption for approximate arithmetic on encrypted data
 
 ### What is Bootstrap?
 
 **See**: [CLIFFORD_FHE_VERSIONS.md](CLIFFORD_FHE_VERSIONS.md) - Version 3 section
 
-**TL;DR**: Refresh encrypted data to remove noise, enabling unlimited computation
+**Summary**: Refresh encrypted data to remove noise, enabling unlimited computation
 
 ### What is the V4 Packing Innovation?
 
 **See**: [CLIFFORD_FHE_VERSIONS.md](CLIFFORD_FHE_VERSIONS.md) - Version 4 section
 
-**TL;DR**: Pack 8 multivector components into 1 ciphertext, eliminating 8× expansion
-
----
+**Summary**: Pack 8 multivector components into 1 ciphertext, eliminating 8× expansion
 
 ## Version Comparison Quick Reference
 
@@ -168,13 +156,11 @@ Optimize your usage:
 | Status | Deprecated | Production | Production | Production |
 | Backend | CPU only | CPU/Metal/CUDA | CPU/Metal/CUDA | CPU/Metal/CUDA |
 | Ciphertexts per MV | 8 | 8 | 8 | **1** |
-| Bootstrap | ❌ | ❌ | ✅ | ⏳ |
+| Bootstrap | No | No | Yes | Planned |
 | Memory Cost | High | High | High | **Low (8× savings)** |
 | Use Case | Proof of concept | Base operations | Full computation | **Batch operations** |
 
 **Recommendation**: Use V4 for new applications requiring batch processing and memory efficiency.
-
----
 
 ## Platform-Specific Notes
 
@@ -211,8 +197,6 @@ cargo run --release --features v4,v2-gpu-cuda --example bench_v4_cuda_geometric_
 cargo run --release --features v4,v2-cpu-optimized --example test_v4_geometric_product
 ```
 
----
-
 ## FAQ Documentation References
 
 **Q: Which version should I use?**
@@ -236,23 +220,19 @@ cargo run --release --features v4,v2-cpu-optimized --example test_v4_geometric_p
 **Q: Why isn't X working?**
 → [TESTING_GUIDE.md](TESTING_GUIDE.md) - Troubleshooting section
 
----
-
 ## Documentation Maintenance
 
 ### Primary Documents (Keep Updated)
 
 These should always reflect current state:
-- ✅ README.md
-- ✅ CLIFFORD_FHE_VERSIONS.md
-- ✅ ARCHITECTURE.md
-- ✅ INSTALLATION.md
-- ✅ TESTING_GUIDE.md
-- ✅ BENCHMARKS.md
-- ✅ COMMANDS.md
-- ✅ FEATURE_FLAGS.md
-
----
+- README.md
+- CLIFFORD_FHE_VERSIONS.md
+- ARCHITECTURE.md
+- INSTALLATION.md
+- TESTING_GUIDE.md
+- BENCHMARKS.md
+- COMMANDS.md
+- FEATURE_FLAGS.md
 
 ## Contributing to Documentation
 
@@ -263,8 +243,6 @@ When adding new features:
 3. **Update** [COMMANDS.md](COMMANDS.md) if new commands are added
 4. **Update** [BENCHMARKS.md](BENCHMARKS.md) with new performance data
 5. **Update** [README.md](README.md) if it affects quick start or overview
-
----
 
 ## Document Cross-References
 
@@ -279,21 +257,6 @@ When adding new features:
 - Quick overview
 - Getting started guide
 
----
+For assistance, start with [README.md](README.md) and follow the links.
 
-## Recent Updates (November 2025)
-
-✅ **New**: [CLIFFORD_FHE_VERSIONS.md](CLIFFORD_FHE_VERSIONS.md) - Complete technical history
-✅ **Updated**: [README.md](README.md) - V4 CUDA support added
-✅ **Streamlined**: Documentation structure simplified
-
----
-
-**Need help?** Start with [README.md](README.md) and follow the links!
-
-**For questions**: GitHub Issues or contact information in README.md
-
----
-
-**Last Updated**: November 22, 2025
-**Status**: Documentation complete and up-to-date
+For questions, see GitHub Issues or contact information in README.md.

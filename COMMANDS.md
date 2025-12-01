@@ -232,7 +232,7 @@ cargo test --lib clifford_fhe_v3::bootstrapping --features v2,v3 -- --nocapture
 ```bash
 # ==== RECOMMENDED: Metal GPU Bootstrap (PRODUCTION READY) ====
 
-# V2 Native Bootstrap (100% GPU) ✅ STABLE - November 2024
+# V2 Native Bootstrap (100% GPU) - Stable
 cargo run --release --features v2,v2-gpu-metal,v3 --example test_metal_gpu_bootstrap_native
 
 # V3 CPU Bootstrap Reference (correct implementation)
@@ -252,7 +252,7 @@ cargo run --release --features v2,v2-gpu-metal,v3 --example test_multiply_rescal
 ```bash
 # ==== CUDA GPU Bootstrap (PRODUCTION READY) ====
 
-# V3 CUDA GPU Bootstrap (100% GPU with relinearization) ✅ STABLE - November 2024
+# V3 CUDA GPU Bootstrap (100% GPU with relinearization) - Stable
 cargo run --release --features v2,v2-gpu-cuda,v3 --example test_cuda_bootstrap
 
 # Results:
@@ -279,26 +279,26 @@ cargo run --release --features v2,v3 --example test_v3_parameters
 
 ### Performance V3
 
-**CUDA GPU Bootstrap (NVIDIA GPU) - November 2024 ✅**
+**CUDA GPU Bootstrap (NVIDIA GPU)**
 ```bash
 # V3 CUDA GPU (100% GPU with relinearization):
 # - Total bootstrap: 11.95s
 # - EvalMod (9 levels): 11.76s (98% of total)
 # - CoeffToSlot (9 levels): ~0.15s
 # - SlotToCoeff (9 levels): ~0.04s
-# - Accuracy: error = ~1e-3 ✅
+# - Accuracy: error = ~1e-3
 # - Parameters: N=1024, 30 primes (1× 60-bit, 29× 45-bit)
 # - Status: PRODUCTION STABLE
 # - Key Achievement: Full bootstrap with relinearization
 ```
 
-**Metal GPU Bootstrap (Apple M3 Max) - November 2024 ✅**
+**Metal GPU Bootstrap (Apple M3 Max)**
 ```bash
 # V2 Native (100% GPU):
 # - Total bootstrap: ~60s
 # - CoeffToSlot (9 levels): ~50s
 # - SlotToCoeff (9 levels): ~12s
-# - Accuracy: error = 3.6e-3 ✅
+# - Accuracy: error = 3.6e-3
 # - Status: PRODUCTION STABLE
 # - Key Achievement: GPU rescaling with Russian peasant mul_mod_128
 
@@ -371,7 +371,7 @@ tests/test_geometric_operations_v4.rs
 # Matches V2/V3 style:
 # - tests/test_geometric_operations_v2.rs ← V2
 # - tests/test_geometric_operations_v3.rs ← V3 (if exists)
-# - tests/test_geometric_operations_v4.rs ← V4 (NEW!)
+# - tests/test_geometric_operations_v4.rs ← V4
 ```
 
 ## Lattice Reduction

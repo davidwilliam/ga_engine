@@ -33,13 +33,13 @@ src/
 │   │   │   ├── rotation_keys.rs   # Rotation key switching
 │   │   │   ├── relin_keys.rs  # Relinearization keys
 │   │   │   ├── device.rs      # Metal device management
-│   │   │   ├── ciphertext_ops.rs  # Ciphertext operations ⭐
+│   │   │   ├── ciphertext_ops.rs  # Ciphertext operations
 │   │   │   └── shaders/
 │   │   │       ├── ntt.metal         # NTT kernels
 │   │   │       ├── pointwise.metal   # Element-wise ops
 │   │   │       ├── galois.metal      # Galois automorphism
 │   │   │       ├── gadget.metal      # Key switching
-│   │   │       └── rns_fixed.metal   # GPU rescaling ⭐
+│   │   │       └── rns_fixed.metal   # GPU rescaling
 │   │   │
 │   │   ├── gpu_cuda/          # NVIDIA CUDA GPU backend
 │   │   │   ├── ckks.rs        # Core CKKS operations
@@ -49,12 +49,12 @@ src/
 │   │   │   ├── relin_keys.rs  # Relinearization keys
 │   │   │   ├── device.rs      # CUDA device management
 │   │   │   ├── geometric.rs   # Geometric product
-│   │   │   ├── ciphertext_ops.rs  # Ciphertext operations ⭐
+│   │   │   ├── ciphertext_ops.rs  # Ciphertext operations
 │   │   │   └── kernels/
 │   │   │       ├── ntt.cu            # NTT kernels
 │   │   │       ├── galois.cu         # Galois automorphism
 │   │   │       ├── gadget.cu         # Gadget decomposition
-│   │   │       └── rns.cu            # RNS operations ⭐
+│   │   │       └── rns.cu            # RNS operations
 │   │   │
 │   │   └── simd_batched/      # SIMD slot packing (experimental)
 │   │
@@ -69,9 +69,9 @@ src/
 │   │   ├── eval_mod.rs        # CPU modular reduction
 │   │   │
 │   │   ├── cuda_bootstrap.rs      # CUDA bootstrap orchestration
-│   │   ├── cuda_coeff_to_slot.rs  # CUDA CoeffToSlot transform ⭐
-│   │   ├── cuda_slot_to_coeff.rs  # CUDA SlotToCoeff transform ⭐
-│   │   ├── cuda_eval_mod.rs       # CUDA modular reduction ⭐
+│   │   ├── cuda_coeff_to_slot.rs  # CUDA CoeffToSlot transform
+│   │   ├── cuda_slot_to_coeff.rs  # CUDA SlotToCoeff transform
+│   │   ├── cuda_eval_mod.rs       # CUDA modular reduction
 │   │   │
 │   │   ├── keys.rs            # Rotation key generation
 │   │   ├── rotation.rs        # Rotation helpers
@@ -82,7 +82,7 @@ src/
 │   ├── params.rs              # V3-optimized parameters
 │   └── prime_gen.rs           # Dynamic NTT-friendly prime generation
 │
-└── clifford_fhe_v4/           # V4 - Packed Slot-Interleaved ⭐
+└── clifford_fhe_v4/           # V4 - Packed Slot-Interleaved
     ├── mod.rs                 # Module exports with feature gating
     ├── multivector.rs         # PackedMultivector type
     ├── packing.rs             # Metal/CPU packing (1-param encode)
@@ -170,7 +170,7 @@ V2 provides these operations used by V3 and V4:
 - `rotate_by_steps()` - High-level rotation API (V4)
 - `rotate_batch_with_hoisting()` - Batched rotation (V4)
 
-All these operations are **100% GPU-resident** (no CPU fallback in hot path).
+All these operations are entirely GPU-resident (no CPU fallback in hot path).
 
 ## Version Details
 
@@ -178,7 +178,7 @@ All these operations are **100% GPU-resident** (no CPU fallback in hot path).
 
 **Purpose:** Proof of concept, correctness verification
 
-**Status:** ✅ Stable, frozen
+**Status:** Stable, frozen
 
 **Characteristics:**
 - Straightforward implementation
@@ -191,13 +191,11 @@ All these operations are **100% GPU-resident** (no CPU fallback in hot path).
 
 **Use Case:** Historical reference, correctness validation
 
----
-
 ### V2: GPU-Accelerated Backend (Foundation)
 
 **Purpose:** Production-quality CKKS implementation, multi-platform GPU support
 
-**Status:** ✅ Production Ready
+**Status:** Production Ready
 
 **Backends:**
 1. **CPU (cpu_optimized/)**: SIMD, Rayon parallelization, Harvey butterfly NTT
@@ -216,13 +214,11 @@ All these operations are **100% GPU-resident** (no CPU fallback in hot path).
 - GPU memory coalescing (CUDA strided layout)
 - Unified memory architecture (Metal)
 
----
-
 ### V3: Full Bootstrap Implementation
 
 **Purpose:** Unlimited circuit depth via noise refresh
 
-**Status:** ✅ Production Ready
+**Status:** Production Ready
 
 **Architecture:** Uses V2 backend infrastructure
 
@@ -236,19 +232,17 @@ All these operations are **100% GPU-resident** (no CPU fallback in hot path).
 **Performance (Full Bootstrap):**
 - CPU: ~70s (reference)
 - Metal GPU (M3 Max): ~60s
-- CUDA GPU (RTX 5090): **11.95s** ⭐
+- CUDA GPU (RTX 5090): **11.95s**
 
 **Ciphertext Representation:** 8 separate ciphertexts per multivector (8× memory cost)
 
 **Use Case:** Deep circuits, complex computations, unlimited multiplication depth
 
----
-
 ### V4: Packed Slot-Interleaved Layout
 
 **Purpose:** Memory-efficient geometric operations, batch processing
 
-**Status:** ✅ Production Ready (Metal + CUDA)
+**Status:** Production Ready (Metal + CUDA)
 
 **Key Innovation:** Pack all 8 multivector components into **1 ciphertext**
 
@@ -282,7 +276,7 @@ Batch size: N/8 = 1024 multivectors per ciphertext
 
 **Backend Support:**
 - **Metal:** Full implementation (1-parameter `encode()`)
-- **CUDA:** Full implementation (3-parameter `encode()`) ⭐
+- **CUDA:** Full implementation (3-parameter `encode()`)
 
 **Critical Implementation Detail (CUDA):**
 After rescaling operations (`multiply_plain`, `add`), both `level` and `num_primes` fields **must** be updated together:
@@ -311,8 +305,6 @@ CudaCiphertext {
 - Batch of 1024 MVs: **1024× throughput** improvement
 
 **Use Case:** Batch processing, memory-constrained environments, SIMD operations
-
----
 
 ## Key Components
 
@@ -427,10 +419,8 @@ ulong mul_mod_128(ulong a, ulong b, ulong q) {
 ```
 
 **Validation:**
-- Golden compare: ✅ Bit-exact with CPU reference
-- Bootstrap accuracy: ✅ Error < 10⁻³
-
----
+- Golden compare: Bit-exact with CPU reference
+- Bootstrap accuracy: Error < 10⁻³
 
 ## Testing
 
@@ -494,8 +484,6 @@ cargo run --release --features v4,v2-gpu-cuda \
 
 See [TESTING_GUIDE.md](TESTING_GUIDE.md) for comprehensive testing instructions.
 
----
-
 ## Performance Summary
 
 ### V2 Geometric Product (Single Operation)
@@ -505,7 +493,7 @@ See [TESTING_GUIDE.md](TESTING_GUIDE.md) for comprehensive testing instructions.
 | V1 Baseline | M3 Max CPU | 11,420 ms | 1× |
 | V2 CPU | M3 Max (14-core) | 300 ms | 38× |
 | V2 Metal | M3 Max GPU | 33 ms | 346× |
-| **V2 CUDA** | **RTX 5090** | **5.7 ms** | **2,002×** |
+| V2 CUDA | RTX 5090 | 5.7 ms | 2,002× |
 
 ### V3 Bootstrap (Full Pipeline)
 
@@ -513,7 +501,7 @@ See [TESTING_GUIDE.md](TESTING_GUIDE.md) for comprehensive testing instructions.
 |---------|----------|------|---------|
 | V3 CPU | M3 Max | ~70s | 1× |
 | V3 Metal | M3 Max GPU | ~60s | 1.17× |
-| **V3 CUDA** | **RTX 5090** | **~11.95s** | **5.86×** |
+| V3 CUDA | RTX 5090 | ~11.95s | 5.86× |
 
 **CUDA Bootstrap Breakdown:**
 - EvalMod: 11.76s (98% of time)
@@ -527,7 +515,7 @@ See [TESTING_GUIDE.md](TESTING_GUIDE.md) for comprehensive testing instructions.
 |-----------|---------|------|-------|
 | Packing (8→1) | CUDA (N=1024) | 31.38s | One-time per batch |
 | Geometric Product | CUDA (N=1024) | 36.84s | On packed data |
-| **Per-MV Cost (batched)** | **CUDA** | **~36ms** | **1024 MVs in parallel** |
+| Per-MV Cost (batched) | CUDA | ~36ms | 1024 MVs in parallel |
 
 **Memory Comparison (N=8192, 15 primes):**
 - V3: 15.7 MB per multivector
@@ -536,33 +524,29 @@ See [TESTING_GUIDE.md](TESTING_GUIDE.md) for comprehensive testing instructions.
 
 See [BENCHMARKS.md](BENCHMARKS.md) for detailed performance analysis.
 
----
-
 ## Development Guidelines
 
 ### V1 - Historical Baseline
-- ❌ Frozen, no new development
-- ✅ Critical bug fixes only
-- ✅ Maintained for reproducibility
+- Frozen, no new development
+- Critical bug fixes only
+- Maintained for reproducibility
 
 ### V2 - Active Development
-- ✅ Performance optimization
-- ✅ New GPU kernel development
-- ✅ Backend improvements
-- ✅ Foundation for V3/V4
+- Performance optimization
+- New GPU kernel development
+- Backend improvements
+- Foundation for V3/V4
 
 ### V3 - Bootstrap Research
-- ✅ Algorithm improvements
-- ✅ Parameter optimization
-- ⚠️ Ensure V2 backend has needed GPU operations first
+- Algorithm improvements
+- Parameter optimization
+- Note: Ensure V2 backend has needed GPU operations first
 
 ### V4 - Packing & Batching
-- ✅ Packing algorithm improvements
-- ✅ Batch operation optimization
-- ⚠️ Ensure V2 backend has needed rotation operations first
-- ⚠️ Maintain synchronization of `level` and `num_primes` fields
-
----
+- Packing algorithm improvements
+- Batch operation optimization
+- Note: Ensure V2 backend has needed rotation operations first
+- Note: Maintain synchronization of `level` and `num_primes` fields
 
 ## Documentation
 
@@ -577,39 +561,35 @@ See [BENCHMARKS.md](BENCHMARKS.md) for detailed performance analysis.
 - **[COMMANDS.md](COMMANDS.md)** - Command reference
 - **[FEATURE_FLAGS.md](FEATURE_FLAGS.md)** - Feature flag reference
 
----
-
 ## Key Achievements
 
 ### V1 (Deprecated)
-- ✅ First working Clifford FHE implementation
-- ✅ All 7 geometric operations
-- ✅ Correctness validated
+- First working Clifford FHE implementation
+- All 7 geometric operations
+- Correctness validated
 
 ### V2 (Production)
-- ✅ Three backends: CPU, Metal GPU, CUDA GPU
-- ✅ NTT optimization (10-100× speedup)
-- ✅ Rotation operations
-- ✅ Relinearization keys
-- ✅ Foundation for V3/V4
+- Three backends: CPU, Metal GPU, CUDA GPU
+- NTT optimization (10-100× speedup)
+- Rotation operations
+- Relinearization keys
+- Foundation for V3/V4
 
 ### V3 (Production)
-- ✅ Full bootstrap implementation
-- ✅ Dynamic prime generation
-- ✅ CPU reference implementation
-- ✅ Metal GPU implementation (~60s)
-- ✅ CUDA GPU implementation (~11.95s) ⭐
-- ✅ Unlimited computation depth
+- Full bootstrap implementation
+- Dynamic prime generation
+- CPU reference implementation
+- Metal GPU implementation (~60s)
+- CUDA GPU implementation (~11.95s)
+- Unlimited computation depth
 
 ### V4 (Production)
-- ✅ Packed slot-interleaved layout
-- ✅ 8× memory reduction
-- ✅ Butterfly network packing
-- ✅ Metal backend complete
-- ✅ CUDA backend complete ⭐
-- ✅ Batch processing (1024× throughput)
-
----
+- Packed slot-interleaved layout
+- 8× memory reduction
+- Butterfly network packing
+- Metal backend complete
+- CUDA backend complete
+- Batch processing (1024× throughput)
 
 ## Future Work
 
@@ -619,13 +599,6 @@ See [BENCHMARKS.md](BENCHMARKS.md) for detailed performance analysis.
 4. **Multi-GPU:** Distribute batches across multiple GPUs
 5. **Vulkan Backend:** Cross-platform GPU support
 
----
-
 ## License
 
 See [LICENSE](LICENSE) file in the repository root.
-
----
-
-**Last Updated:** November 22, 2025
-**Status:** All versions (V1-V4) production-ready with comprehensive documentation

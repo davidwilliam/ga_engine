@@ -213,7 +213,7 @@ By making lattice reduction optional:
 
 ### Valid Combinations
 
-✅ **Recommended combinations:**
+**Recommended combinations:**
 ```bash
 # V1 only
 --features v1
@@ -249,7 +249,7 @@ By making lattice reduction optional:
 
 ### Invalid Combinations
 
-❌ **These will fail:**
+**These will fail:**
 ```bash
 # V3 without V2 (v3 requires v2)
 --features v3  # ERROR: v3 requires v2

@@ -131,7 +131,7 @@ nvidia-smi -l 1  # Monitor GPU usage in real-time (in separate terminal)
 # Build V3 with CUDA backend
 cargo build --release --features v2,v2-gpu-cuda,v3
 
-# Run CUDA GPU bootstrap (PRODUCTION READY - November 2024)
+# Run CUDA GPU bootstrap
 cargo run --release --features v2,v2-gpu-cuda,v3 --example test_cuda_bootstrap
 
 # Expected results:

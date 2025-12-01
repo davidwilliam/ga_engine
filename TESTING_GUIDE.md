@@ -109,7 +109,7 @@ cargo run --release --features v2,v2-gpu-metal,v3 --example test_metal_gpu_boots
 # - Total bootstrap: ~60s
 # - CoeffToSlot: ~50s
 # - SlotToCoeff: ~12s
-# - Error: ~3.6e-3 (excellent)
+# - Error: ~3.6e-3
 # - Status: Production Stable
 ```
 
@@ -152,7 +152,7 @@ nvidia-smi -l 1
 # - EvalMod: ~11.76s (98% of time)
 # - CoeffToSlot: ~0.15s
 # - SlotToCoeff: ~0.04s
-# - Error: ~1e-3 (excellent)
+# - Error: ~1e-3
 # - GPU utilization: >90% during EvalMod
 # - Status: Production Stable
 ```
@@ -269,16 +269,16 @@ test result: ok. 210 passed; 0 failed; 0 ignored; 0 measured; finished in 70.22s
 ╚═══════════════════════════════════════════════════════════════╝
 
 Step 1: Initializing parameters
-✓ Generated 30 NTT-friendly primes
+- Generated 30 NTT-friendly primes
 
 Step 2: Initializing CUDA contexts
-✓ CUDA device initialized
+- CUDA device initialized
 
 Step 3: Generating keys
-✓ Keys generated
+- Keys generated
 
 Step 4: Encrypting input
-✓ Input encrypted
+- Input encrypted
 
 Step 5: Running bootstrap
   CoeffToSlot completed in 0.15s
@@ -289,8 +289,8 @@ Step 5: Running bootstrap
 Bootstrap completed in 11.95s
 ═══════════════════════════════════════════════════════════════
 
-✅ V3 CUDA GPU BOOTSTRAP COMPLETE
-   Full implementation with relinearization!
+V3 CUDA GPU BOOTSTRAP COMPLETE
+   Full implementation with relinearization.
 ```
 
 ## Clean Build Testing
@@ -444,8 +444,8 @@ cargo run --release --features v2,v2-gpu-cuda,v3 --example test_cuda_bootstrap
 | Backend | Hardware | Total Time | Speedup vs CPU | Status |
 |---------|----------|------------|----------------|--------|
 | V3 CPU | Apple M3 Max | ~70s | 1× | Reference |
-| V3 Metal GPU | Apple M3 Max | ~60s | 1.17× | ✅ Production Stable |
-| V3 CUDA GPU | NVIDIA GPU | ~11.95s | 5.86× | ✅ Production Stable |
+| V3 Metal GPU | Apple M3 Max | ~60s | 1.17× | Production Stable |
+| V3 CUDA GPU | NVIDIA GPU | ~11.95s | 5.86× | Production Stable |
 
 ## Related Documentation
 

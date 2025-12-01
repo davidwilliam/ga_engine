@@ -8,8 +8,6 @@ This document contains performance benchmarks for the GA Engine Clifford FHE imp
 2. [GPU Bootstrap Performance](#gpu-bootstrap-performance)
 3. [Detailed Analysis](#detailed-analysis)
 
----
-
 ## V1 vs V2 Core Operations
 
 ### Benchmark Setup
@@ -47,18 +45,16 @@ Both V1 and V2 support geometric operations. V2 is faster for complex operations
 
 | Operation | V1 Time | V2 Time | **Speedup** |
 |-----------|---------|---------|-------------|
-| **Reverse** | 363 µs | 671 µs | **0.54× (SLOWER)** ⚠️ |
+| **Reverse** | 363 µs | 671 µs | **0.54× (slower)** |
 | **Geometric Product** | 11.5 s | 2.03 s | **5.7×** |
 | **Wedge Product** | TBD | 4.15 s | TBD |
 | **Inner Product** | TBD | 4.11 s | TBD |
 
-⚠️ **Note**: The reverse operation performance regression in V2 (1.85× slower) is due to RnsRepresentation design requiring `moduli: Vec<u64>` to be cloned for each coefficient (N=1024 times). V1 stores moduli separately at the ciphertext level. This could be optimized by refactoring RnsRepresentation to use `Rc<Vec<u64>>` for shared moduli, but this would require changing ~20+ call sites throughout the V2 codebase. For now, this minor overhead (~300µs absolute) is acceptable given V2's 5-7× speedup on expensive operations.
-
----
+**Note**: The reverse operation performance regression in V2 (1.85× slower) is due to RnsRepresentation design requiring `moduli: Vec<u64>` to be cloned for each coefficient (N=1024 times). V1 stores moduli separately at the ciphertext level. This could be optimized by refactoring RnsRepresentation to use `Rc<Vec<u64>>` for shared moduli, but this would require changing ~20+ call sites throughout the V2 codebase. For now, this minor overhead (~300µs absolute) is acceptable given V2's 5-7× speedup on expensive operations.
 
 ## GPU Bootstrap Performance
 
-### V3 Bootstrap (November 2024)
+### V3 Bootstrap
 
 V3 implements full CKKS bootstrap with three backends: CPU, Metal GPU, and CUDA GPU.
 
@@ -89,12 +85,12 @@ cargo run --release --features v2,v2-gpu-metal,v3 --example test_metal_gpu_boots
 | **EvalMod** (9 levels) | TBD | GPU | Modular reduction |
 | **SlotToCoeff** (9 levels) | ~12s | GPU | Linear transforms + rotations |
 | **Decryption** | ~11ms | GPU | Single ciphertext |
-| **Total Bootstrap** | **~60s** | **GPU** | **100% GPU execution** ⭐ |
+| **Total Bootstrap** | **~60s** | **GPU** | **Entirely GPU execution** |
 
-**Error**: 3.6e-3 (excellent accuracy)
+**Error**: 3.6e-3
 
 **Key Features:**
-- 100% GPU execution (no CPU fallback)
+- Entirely GPU execution (no CPU fallback)
 - Uses Metal shaders for all operations
 - GPU-resident ciphertexts (minimal PCIe transfers)
 - Exact rescaling with Russian peasant `mul_mod_128`
@@ -106,19 +102,19 @@ cargo run --release --features v2,v2-gpu-metal,v3 --example test_metal_gpu_boots
 cargo run --release --features v2,v2-gpu-cuda,v3 --example test_cuda_bootstrap
 ```
 
-#### Results (Latest - November 9, 2024)
+#### Results
 
 | Operation | Time | Backend | Notes |
 |-----------|------|---------|-------|
 | **CoeffToSlot** | ~0.15s | GPU | Linear transforms + rotations |
 | **EvalMod** | **11.76s** | GPU | Modular reduction with BSGS |
 | **SlotToCoeff** | ~0.04s | GPU | Linear transforms + rotations |
-| **Total Bootstrap** | **11.95s** | **GPU** | **With relinearization** ⭐ |
+| **Total Bootstrap** | **11.95s** | **GPU** | **With relinearization** |
 
-**Error**: ~1e-3 (excellent accuracy)
+**Error**: ~1e-3
 
 **Key Features:**
-- 100% GPU execution with CUDA kernels
+- Entirely GPU execution with CUDA kernels
 - Full relinearization support
 - GPU-resident ciphertexts throughout
 - Optimized RNS operations (add, sub, pointwise multiply)
@@ -129,16 +125,14 @@ cargo run --release --features v2,v2-gpu-cuda,v3 --example test_cuda_bootstrap
 | Backend | Hardware | Total Time | Speedup vs CPU | Notes |
 |---------|----------|------------|----------------|-------|
 | **V3 CPU** | Apple M3 Max | ~70s | 1.0× | Reference |
-| **V3 Metal GPU** | Apple M3 Max | ~60s | 1.17× | 100% GPU |
-| **V3 CUDA GPU** | NVIDIA GPU | **11.95s** | **5.86×** | **100% GPU + Relin** ⭐ |
+| **V3 Metal GPU** | Apple M3 Max | ~60s | 1.17× | Entirely GPU |
+| **V3 CUDA GPU** | NVIDIA GPU | **11.95s** | **5.86×** | **Entirely GPU + Relin** |
 
 **Key Insight**: CUDA implementation is ~5× faster than Metal on this workload, primarily due to:
 - Different GPU architectures (NVIDIA vs Apple Silicon)
 - Optimized CUDA kernels for FHE operations
 - Efficient relinearization implementation
 - Hardware-specific optimizations
-
----
 
 ## Detailed Analysis
 
@@ -234,8 +228,6 @@ For a single geometric product of 8-component multivectors:
 - Each multiplication: ~34ms
 - Total theoretical time: ~2.2s (matches observed 2.07s)
 
----
-
 ## Accuracy Verification
 
 All implementations maintain high accuracy:
@@ -256,9 +248,7 @@ All implementations maintain high accuracy:
 - **CUDA GPU Bootstrap**: ~1e-3 error
 - **CPU Reference**: 3.6e-3 error
 
-All errors are well within acceptable bounds for FHE applications.
-
----
+All errors are within acceptable bounds for FHE applications.
 
 ## Future Optimization Opportunities
 
@@ -285,8 +275,6 @@ Based on feature flags and current development:
    - Distribute bootstrap across multiple GPUs
    - Parallel ciphertext processing
    - Estimated 2-4× additional speedup
-
----
 
 ## Benchmark Reproducibility
 
@@ -327,13 +315,3 @@ For consistent results:
 - Ensure adequate cooling
 - Run multiple times and average results
 - Use the same compiler and CUDA/Metal SDK versions
-
----
-
-## Benchmark History
-
-| Date | Operation | V1 Time | V2 Time | Speedup | Notes |
-|------|-----------|---------|---------|---------|-------|
-| 2025-11-04 | Ciphertext Mult | 109.9 ms | 34.0 ms | 3.2× | Initial NTT-based implementation |
-| 2025-11-08 | Bootstrap (Metal) | ~70s (CPU) | ~60s | 1.17× | 100% GPU Metal bootstrap |
-| 2025-11-09 | Bootstrap (CUDA) | ~70s (CPU) | **11.95s** | **5.86×** | **100% GPU CUDA bootstrap** ⭐ |
