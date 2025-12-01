@@ -340,7 +340,8 @@ __global__ void ntt_scalar_multiply(
  * Input layout: data[prime_idx * n + coeff_idx] (flat RNS)
  * Grid: (butterfly_blocks, num_primes, 1)
  *
- * This replaces num_primes sequential kernel launches with ONE launch.
+ * Uses Cooley-Tukey DIT algorithm, matching the single-prime ntt_forward.
+ * IMPORTANT: Bit-reversal must be done BEFORE calling this kernel!
  */
 __global__ void ntt_forward_batched(
     unsigned long long* data,              // All primes' data [num_primes * n]
@@ -349,41 +350,43 @@ __global__ void ntt_forward_batched(
     unsigned int n,                        // Ring dimension
     unsigned int num_primes,               // Number of RNS primes
     unsigned int stage,                    // Current NTT stage
-    unsigned int m                         // Butterfly group size
+    unsigned int m                         // Butterfly group size = 2^stage
 ) {
     // 2D grid: x = butterfly index, y = prime index
-    unsigned int butterfly_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int gid = blockIdx.x * blockDim.x + threadIdx.x;
     unsigned int prime_idx = blockIdx.y;
 
     unsigned int total_butterflies = n / 2;
 
-    if (butterfly_idx >= total_butterflies || prime_idx >= num_primes) return;
+    if (gid >= total_butterflies || prime_idx >= num_primes) return;
 
     // Get modulus for this prime
     unsigned long long q = moduli[prime_idx];
 
-    // Offset to this prime's data
+    // Offset to this prime's data and twiddles
     unsigned int prime_offset = prime_idx * n;
     unsigned long long* coeffs = data + prime_offset;
     const unsigned long long* twid = twiddles + prime_offset;
 
-    // Butterfly indices (same logic as single-prime version)
-    unsigned int k = butterfly_idx / m;
-    unsigned int j = butterfly_idx % m;
-    unsigned int butterfly_span = m * 2;
+    // Cooley-Tukey DIT butterfly indices (matches single-prime ntt_forward)
+    unsigned int m2 = m * 2;
+    unsigned int k = gid / m;        // Which butterfly group
+    unsigned int j = gid % m;        // Position within group
 
-    unsigned int idx1 = k * butterfly_span + j;
+    unsigned int idx1 = k * m2 + j;
     unsigned int idx2 = idx1 + m;
 
-    // Harvey butterfly: (a, b) -> (a + w*b, a - w*b)
-    unsigned long long a = coeffs[idx1];
-    unsigned long long b = coeffs[idx2];
-    unsigned long long w = twid[m + j];
+    // w = omega^((n/m2) * j) = twiddles[(n/m2) * j]
+    unsigned int twiddle_stride = n / m2;
+    unsigned int twiddle_idx = twiddle_stride * j;
+    unsigned long long w = twid[twiddle_idx];
 
-    unsigned long long wb = mul_mod(w, b, q);
+    // Cooley-Tukey butterfly: (u, v) -> (u + w*v, u - w*v)
+    unsigned long long u = coeffs[idx1];
+    unsigned long long t = mul_mod(w, coeffs[idx2], q);
 
-    coeffs[idx1] = add_mod(a, wb, q);
-    coeffs[idx2] = sub_mod(a, wb, q);
+    coeffs[idx1] = add_mod(u, t, q);
+    coeffs[idx2] = sub_mod(u, t, q);
 }
 
 /**
@@ -391,6 +394,10 @@ __global__ void ntt_forward_batched(
  *
  * Input layout: data[prime_idx * n + coeff_idx] (flat RNS)
  * Grid: (butterfly_blocks, num_primes, 1)
+ *
+ * Uses Gentleman-Sande DIF algorithm, matching the single-prime ntt_inverse.
+ * IMPORTANT: Stages must be called in REVERSE order (log_n-1 down to 0)
+ * IMPORTANT: Bit-reversal + scaling must be done AFTER all stages complete!
  */
 __global__ void ntt_inverse_batched(
     unsigned long long* data,
@@ -399,14 +406,14 @@ __global__ void ntt_inverse_batched(
     unsigned int n,
     unsigned int num_primes,
     unsigned int stage,
-    unsigned int m
+    unsigned int m  // m = 1 << (stage + 1), passed from Rust
 ) {
-    unsigned int butterfly_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int gid = blockIdx.x * blockDim.x + threadIdx.x;
     unsigned int prime_idx = blockIdx.y;
 
     unsigned int total_butterflies = n / 2;
 
-    if (butterfly_idx >= total_butterflies || prime_idx >= num_primes) return;
+    if (gid >= total_butterflies || prime_idx >= num_primes) return;
 
     unsigned long long q = moduli[prime_idx];
 
@@ -414,25 +421,72 @@ __global__ void ntt_inverse_batched(
     unsigned long long* coeffs = data + prime_offset;
     const unsigned long long* twid_inv = twiddles_inv + prime_offset;
 
-    // Butterfly indices (inverse pattern)
-    unsigned int k = butterfly_idx / m;
-    unsigned int j = butterfly_idx % m;
-    unsigned int butterfly_span = m * 2;
+    // Gentleman-Sande DIF butterfly indices (matches single-prime ntt_inverse)
+    unsigned int m_half = 1 << stage;  // m_half = m / 2
+    unsigned int m2 = m_half * 2;      // m2 = m = 1 << (stage + 1)
 
-    unsigned int idx1 = k * butterfly_span + j;
-    unsigned int idx2 = idx1 + m;
+    unsigned int block_idx = gid / m_half;
+    unsigned int idx_in_block = gid % m_half;
 
-    // Inverse butterfly
-    unsigned long long a = coeffs[idx1];
-    unsigned long long b = coeffs[idx2];
-    unsigned long long w_inv = twid_inv[m + j];
+    unsigned int i = block_idx * m2 + idx_in_block;
+    unsigned int j = i + m_half;
 
-    unsigned long long sum = add_mod(a, b, q);
-    unsigned long long diff = sub_mod(a, b, q);
-    unsigned long long w_diff = mul_mod(w_inv, diff, q);
+    // Twiddle index: (n / m2) * idx_in_block
+    unsigned int twiddle_idx = (n / m2) * idx_in_block;
+    unsigned long long omega_inv = twid_inv[twiddle_idx];
 
-    coeffs[idx1] = sum;
-    coeffs[idx2] = w_diff;
+    // Gentleman-Sande (DIF) butterfly: (u, v) -> (u + v, (u - v) * w)
+    unsigned long long u = coeffs[i];
+    unsigned long long v = coeffs[j];
+
+    coeffs[i] = add_mod(u, v, q);
+    coeffs[j] = mul_mod(sub_mod(u, v, q), omega_inv, q);
+}
+
+/**
+ * Batched final step of inverse NTT: bit-reversal + scaling by n^(-1)
+ *
+ * This is performed AFTER all inverse butterfly stages complete.
+ * Processes all primes in parallel.
+ *
+ * Grid: (coeff_blocks, num_primes, 1)
+ */
+__global__ void ntt_inverse_final_batched(
+    unsigned long long* data,
+    const unsigned long long* n_inv_values,  // n_inv for each prime [num_primes]
+    const unsigned long long* moduli,        // moduli for each prime [num_primes]
+    unsigned int n,
+    unsigned int num_primes,
+    unsigned int log_n
+) {
+    unsigned int gid = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int prime_idx = blockIdx.y;
+
+    if (gid >= n || prime_idx >= num_primes) return;
+
+    unsigned long long q = moduli[prime_idx];
+    unsigned long long n_inv = n_inv_values[prime_idx];
+
+    unsigned int prime_offset = prime_idx * n;
+    unsigned long long* coeffs = data + prime_offset;
+
+    // Compute bit-reversed index
+    unsigned int reversed = 0;
+    unsigned int temp = gid;
+    for (unsigned int i = 0; i < log_n; i++) {
+        reversed = (reversed << 1) | (temp & 1);
+        temp >>= 1;
+    }
+
+    // Only swap if gid <= reversed to avoid double-swapping
+    // Also scale by n_inv during the swap
+    if (gid <= reversed) {
+        unsigned long long val_gid = mul_mod(coeffs[gid], n_inv, q);
+        unsigned long long val_rev = mul_mod(coeffs[reversed], n_inv, q);
+
+        coeffs[gid] = val_rev;
+        coeffs[reversed] = val_gid;
+    }
 }
 
 /**

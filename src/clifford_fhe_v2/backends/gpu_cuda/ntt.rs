@@ -45,6 +45,7 @@ impl CudaNttContext {
             "ntt_pointwise_multiply",
             "ntt_forward_batched",
             "ntt_inverse_batched",
+            "ntt_inverse_final_batched",
             "ntt_pointwise_multiply_batched",
         ]).map_err(|e| format!("Failed to load PTX: {:?}", e))?;
 
