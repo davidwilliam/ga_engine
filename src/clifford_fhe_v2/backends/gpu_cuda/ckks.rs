@@ -1939,6 +1939,26 @@ impl CudaCkksContext {
         Ok(())
     }
 
+    /// Public wrapper for apply_negacyclic_twist_gpu
+    /// Used by relinearization to apply twist on GPU-resident data
+    pub fn apply_negacyclic_twist_gpu_public(
+        &self,
+        gpu_data: &mut CudaSlice<u64>,
+        num_primes: usize,
+    ) -> Result<(), String> {
+        self.apply_negacyclic_twist_gpu(gpu_data, num_primes)
+    }
+
+    /// Public wrapper for apply_negacyclic_untwist_gpu
+    /// Used by relinearization to apply untwist on GPU-resident data
+    pub fn apply_negacyclic_untwist_gpu_public(
+        &self,
+        gpu_data: &mut CudaSlice<u64>,
+        num_primes: usize,
+    ) -> Result<(), String> {
+        self.apply_negacyclic_untwist_gpu(gpu_data, num_primes)
+    }
+
     /// Convert strided layout to flat layout on GPU
     ///
     /// Strided: poly_in[coeff_idx * stride + prime_idx]

@@ -495,6 +495,9 @@ impl CudaRelinKeys {
 
     /// GPU polynomial multiplication in flat RNS layout using BATCHED NTT
     ///
+    /// **NEGACYCLIC CONVOLUTION**: Uses twist/untwist for R[X]/(X^N + 1)
+    /// This matches Metal's multiply_polys_flat_ntt_negacyclic behavior.
+    ///
     /// **NEW OPTIMIZED VERSION**: Uses batched GPU operations to process all primes at once.
     /// This is ~100× faster than the old sequential version!
     ///
@@ -516,6 +519,11 @@ impl CudaRelinKeys {
         let mut gpu_p2 = self.device.device.htod_copy(poly2[..n * num_primes].to_vec())
             .map_err(|e| format!("Failed to upload poly2: {:?}", e))?;
 
+        // TWIST: Apply psi^i for negacyclic convolution (CRITICAL!)
+        // Without this, we get cyclic convolution instead of negacyclic
+        ckks_ctx.apply_negacyclic_twist_gpu_public(&mut gpu_p1, num_primes)?;
+        ckks_ctx.apply_negacyclic_twist_gpu_public(&mut gpu_p2, num_primes)?;
+
         // Forward NTT - BATCHED for all primes at once!
         ckks_ctx.ntt_forward_batched_gpu(&mut gpu_p1, num_primes)?;
         ckks_ctx.ntt_forward_batched_gpu(&mut gpu_p2, num_primes)?;
@@ -527,6 +535,9 @@ impl CudaRelinKeys {
 
         // Inverse NTT - BATCHED for all primes at once!
         ckks_ctx.ntt_inverse_batched_gpu(&mut gpu_result, num_primes)?;
+
+        // UNTWIST: Apply psi^{-i} to get negacyclic result (CRITICAL!)
+        ckks_ctx.apply_negacyclic_untwist_gpu_public(&mut gpu_result, num_primes)?;
 
         // Download final result ONCE
         let result = self.device.device.dtoh_sync_copy(&gpu_result)
