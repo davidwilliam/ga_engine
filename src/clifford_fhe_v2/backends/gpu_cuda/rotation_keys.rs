@@ -64,8 +64,9 @@ pub struct CudaRotationKeys {
     /// Barrett reducers for key level
     reducers_key: Vec<BarrettReducer>,
 
-    /// Gadget decomposition base (typically w = 2^base_bits, e.g., 2^16)
-    pub base_w: u64,
+    /// Gadget decomposition base EXPONENT (e.g., 16 for w = 2^16)
+    /// NOTE: This stores the exponent, not the base itself. Use base_w() to get 2^base_bits.
+    pub base_bits: u32,
 
     /// Number of gadget digits: dnum = ceil(log_w(Q_key))
     pub dnum: usize,
@@ -114,7 +115,8 @@ impl CudaRotationKeys {
             .collect();
 
         // Compute gadget parameters
-        let base_w = 1u64 << base_bits;
+        let base_bits_u32 = base_bits as u32;  // Store exponent, not base
+        let base_w = 1u64 << base_bits;  // Computed when needed
         let max_prime_bits = moduli_key.iter().map(|&q| (64 - q.leading_zeros()) as usize).max().unwrap_or(60);
         let total_bits = max_prime_bits * num_primes_key;
         let dnum = (total_bits + base_bits - 1) / base_bits;
@@ -129,7 +131,7 @@ impl CudaRotationKeys {
             params,
             rotation_ctx,
             reducers_key,
-            base_w,
+            base_bits: base_bits_u32,
             dnum,
             secret_key,
             keys: std::collections::HashMap::new(),
@@ -200,7 +202,8 @@ impl CudaRotationKeys {
             // Compute b_i = -a_i · s(X^g) + e_i + w^i · s(X^g)
             //             = (w^i - a_i) · s(X^g) + e_i
 
-            let w_power = self.base_w.pow(digit_idx as u32);
+            let base_w = 1u64 << self.base_bits;
+            let w_power = base_w.pow(digit_idx as u32);
 
             // First compute: (w^i - a_i) mod each prime
             let mut w_minus_a = vec![0u64; n * num_primes_key];
@@ -305,7 +308,8 @@ impl CudaRotationKeys {
             // Compute b_i = -a_i · s(X^g) + e_i + w^i · s(X^g)
             //             = (w^i - a_i) · s(X^g) + e_i
 
-            let w_power = self.base_w.pow(digit_idx as u32);
+            let base_w = 1u64 << self.base_bits;
+            let w_power = base_w.pow(digit_idx as u32);
 
             // First compute: (w^i - a_i) mod each prime
             let mut w_minus_a = vec![0u64; n * num_primes_key];

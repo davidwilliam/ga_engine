@@ -183,8 +183,8 @@ fn main() -> Result<(), String> {
     println!("════════════════════════════════════════════════════════════════════════\n");
 
     // Get gadget params
-    let (base_w, num_digits) = relin_keys.gadget_params();
-    println!("  Gadget base: 2^{} = {}", base_w, 1u64 << base_w);
+    let (base_bits, num_digits) = relin_keys.gadget_params();
+    println!("  Gadget base: 2^{} = {}", base_bits, relin_keys.base_w());
     println!("  Number of digits: {}", num_digits);
 
     // We can't directly call gadget_decompose, but we can check the relin key structure

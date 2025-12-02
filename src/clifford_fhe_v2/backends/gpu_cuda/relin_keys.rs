@@ -61,8 +61,9 @@ pub struct CudaRelinKeys {
     /// Barrett reducers for key level
     reducers_key: Vec<BarrettReducer>,
 
-    /// Gadget decomposition base (typically w = 2^base_bits, e.g., 2^16)
-    pub base_w: u64,
+    /// Gadget decomposition base EXPONENT (e.g., 16 for w = 2^16)
+    /// NOTE: This stores the exponent, not the base itself. Use base_w() to get 2^base_bits.
+    pub base_bits: u32,
 
     /// Number of gadget digits: dnum = ceil(log_w(Q_key))
     pub dnum: usize,
@@ -89,7 +90,8 @@ impl CudaRelinKeys {
         println!("║        Initializing CUDA Relinearization Keys                ║");
         println!("╚═══════════════════════════════════════════════════════════════╝\n");
 
-        let base_w = 1u64 << base_bits;  // w = 2^base_bits
+        let base_bits_u32 = base_bits as u32;  // Store exponent, not base
+        let base_w = 1u64 << base_bits;  // w = 2^base_bits (computed when needed)
 
         // Determine number of RNS primes for keys (use all available)
         let num_primes_key = params.moduli.len();
@@ -116,7 +118,7 @@ impl CudaRelinKeys {
             device,
             params,
             reducers_key,
-            base_w,
+            base_bits: base_bits_u32,
             dnum,
             relin_key: None,
         };
@@ -145,7 +147,8 @@ impl CudaRelinKeys {
         println!("║        Initializing CUDA Relinearization Keys                ║");
         println!("╚═══════════════════════════════════════════════════════════════╝\n");
 
-        let base_w = 1u64 << base_bits;  // w = 2^base_bits
+        let base_bits_u32 = base_bits as u32;  // Store exponent, not base
+        let base_w = 1u64 << base_bits;  // w = 2^base_bits (computed when needed)
 
         // Determine number of RNS primes for keys (use all available)
         let num_primes_key = params.moduli.len();
@@ -172,7 +175,7 @@ impl CudaRelinKeys {
             device,
             params,
             reducers_key,
-            base_w,
+            base_bits: base_bits_u32,
             dnum,
             relin_key: None,
         };
@@ -207,7 +210,7 @@ impl CudaRelinKeys {
         // CRITICAL FIX: Precompute B^t mod q for each prime and each digit
         // This avoids u128 overflow when t is large (e.g., B^7 = 2^140 > 2^128)
         // Matches Metal implementation in relin_keys.rs lines 148-159
-        let base = self.base_w;
+        let base = 1u64 << self.base_bits;  // B = 2^base_bits
         let mut bpow_t_mod_q = vec![vec![0u64; num_primes_key]; self.dnum];
         for (j, &q) in self.params.moduli[..num_primes_key].iter().enumerate() {
             let q_u128 = q as u128;
@@ -327,7 +330,8 @@ impl CudaRelinKeys {
             }
 
             // Add w^i · s
-            let power_of_w = self.base_w.pow(digit_idx as u32);
+            let base_w = 1u64 << self.base_bits;
+            let power_of_w = base_w.pow(digit_idx as u32);
             for coeff_idx in 0..n {
                 for prime_idx in 0..num_primes_key {
                     let flat_idx = prime_idx * n + coeff_idx;
@@ -742,16 +746,16 @@ impl CudaRelinKeys {
     fn gadget_decompose(&self, poly: &[u64], num_primes: usize) -> Result<Vec<Vec<u64>>, String> {
         let n = self.params.n;
         let moduli = &self.params.moduli[..num_primes];
-        let base_w = self.base_w as u32;
+        let base_bits = self.base_bits;  // This is the EXPONENT (e.g., 16)
 
         // Compute Q = product of all primes
         let q_prod_big: BigInt = moduli.iter().map(|&q| BigInt::from(q)).product();
         let q_half_big = &q_prod_big / 2;
-        let base_big = BigInt::one() << base_w;  // B = 2^base_w
+        let base_big = BigInt::one() << base_bits;  // B = 2^base_bits (e.g., 2^16 = 65536)
 
         // Determine number of digits based on Q
         let q_bits = q_prod_big.bits() as u32;
-        let num_digits = ((q_bits + base_w - 1) / base_w) as usize;
+        let num_digits = ((q_bits + base_bits - 1) / base_bits) as usize;
 
         // Use the smaller of computed num_digits or self.dnum
         let actual_num_digits = num_digits.min(self.dnum);
@@ -955,8 +959,14 @@ impl CudaRelinKeys {
     }
 
     /// Get gadget decomposition parameters
+    /// Returns (base_bits, num_digits) where base = 2^base_bits
     pub fn gadget_params(&self) -> (u32, usize) {
-        (self.base_w as u32, self.dnum)
+        (self.base_bits, self.dnum)
+    }
+
+    /// Get the actual gadget base value (2^base_bits)
+    pub fn base_w(&self) -> u64 {
+        1u64 << self.base_bits
     }
 }
 
