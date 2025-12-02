@@ -548,11 +548,21 @@ impl CudaRelinKeys {
         Ok(result)
     }
 
-    /// GPU polynomial multiplication in flat RNS layout using NTT (OLD SLOW VERSION - DEPRECATED)
+    /// GPU polynomial multiplication in flat RNS layout using NTT (per-prime sequential version)
     ///
-    /// ⚠️ DO NOT USE - This does sequential NTT per prime (very slow!)
-    /// Use gpu_multiply_flat_ntt_batched() instead.
-    #[allow(dead_code)]
+    /// **NEGACYCLIC CONVOLUTION**: This function performs multiplication in
+    /// the negacyclic ring R[X]/(X^N + 1) required by CKKS.
+    ///
+    /// Note: This is slower than gpu_multiply_flat_ntt_batched but is used during
+    /// key generation where we need per-prime control.
+    ///
+    /// For each prime q:
+    /// 1. Find psi (primitive 2N-th root of unity) such that psi² = omega
+    /// 2. Apply twist: multiply by psi^i for negacyclic
+    /// 3. Forward NTT (cyclic convolution)
+    /// 4. Pointwise multiply
+    /// 5. Inverse NTT
+    /// 6. Apply untwist: multiply by psi^{-i}
     fn gpu_multiply_flat_ntt(
         &self,
         poly1: &[u64],
@@ -563,14 +573,29 @@ impl CudaRelinKeys {
         let n = self.params.n;
         let mut result = vec![0u64; n * num_primes];
 
-        // For each RNS prime, use GPU NTT multiplication
+        // For each RNS prime, use GPU NTT multiplication with NEGACYCLIC convolution
         for prime_idx in 0..num_primes {
             let ntt_ctx = &ntt_contexts[prime_idx];
+            let q = self.params.moduli[prime_idx];
+            let omega = ntt_ctx.root;  // omega is the primitive N-th root
             let offset = prime_idx * n;
+
+            // Find psi (primitive 2N-th root) such that psi² = omega
+            // We use Tonelli-Shanks or trial method to find sqrt(omega) mod q
+            let psi = Self::find_sqrt_mod(omega, q)?;
+            let psi_inv = Self::mod_inverse_u64(psi, q)?;
 
             // Extract polynomials for this prime
             let mut p1 = poly1[offset..offset + n].to_vec();
             let mut p2 = poly2[offset..offset + n].to_vec();
+
+            // TWIST: Multiply by psi^i for negacyclic convolution
+            let mut psi_pow = 1u64;
+            for i in 0..n {
+                p1[i] = Self::mul_mod_u64(p1[i], psi_pow, q);
+                p2[i] = Self::mul_mod_u64(p2[i], psi_pow, q);
+                psi_pow = Self::mul_mod_u64(psi_pow, psi, q);
+            }
 
             // Transform to NTT domain (GPU)
             ntt_ctx.forward(&mut p1)?;
@@ -583,11 +608,116 @@ impl CudaRelinKeys {
             // Transform back to coefficient domain (GPU)
             ntt_ctx.inverse(&mut prod)?;
 
+            // UNTWIST: Multiply by psi^{-i} to get negacyclic result
+            let mut psi_inv_pow = 1u64;
+            for i in 0..n {
+                prod[i] = Self::mul_mod_u64(prod[i], psi_inv_pow, q);
+                psi_inv_pow = Self::mul_mod_u64(psi_inv_pow, psi_inv, q);
+            }
+
             // Store result
             result[offset..offset + n].copy_from_slice(&prod);
         }
 
         Ok(result)
+    }
+
+    /// Find sqrt(a) mod p using Tonelli-Shanks algorithm
+    fn find_sqrt_mod(a: u64, p: u64) -> Result<u64, String> {
+        // For our NTT primes, p ≡ 1 (mod 2N), so sqrt exists
+        // We use a simple trial approach for now (works for NTT primes)
+
+        // Special case: a = 0 or 1
+        if a == 0 { return Ok(0); }
+        if a == 1 { return Ok(1); }
+
+        // Factor out powers of 2 from p-1
+        let mut q = p - 1;
+        let mut s = 0u32;
+        while q % 2 == 0 {
+            q /= 2;
+            s += 1;
+        }
+
+        // Find a non-residue
+        let mut z = 2u64;
+        while Self::pow_mod(z, (p - 1) / 2, p) != p - 1 {
+            z += 1;
+            if z >= p { return Err("No quadratic non-residue found".to_string()); }
+        }
+
+        let mut m = s;
+        let mut c = Self::pow_mod(z, q, p);
+        let mut t = Self::pow_mod(a, q, p);
+        let mut r = Self::pow_mod(a, (q + 1) / 2, p);
+
+        loop {
+            if t == 0 { return Ok(0); }
+            if t == 1 { return Ok(r); }
+
+            // Find smallest i such that t^(2^i) = 1
+            let mut i = 1u32;
+            let mut temp = Self::mul_mod_u64(t, t, p);
+            while temp != 1 {
+                temp = Self::mul_mod_u64(temp, temp, p);
+                i += 1;
+                if i >= m { return Err("Tonelli-Shanks failed".to_string()); }
+            }
+
+            // Update values
+            let b = Self::pow_mod(c, 1u64 << (m - i - 1), p);
+            m = i;
+            c = Self::mul_mod_u64(b, b, p);
+            t = Self::mul_mod_u64(t, c, p);
+            r = Self::mul_mod_u64(r, b, p);
+        }
+    }
+
+    /// Modular exponentiation: a^e mod p
+    fn pow_mod(mut a: u64, mut e: u64, p: u64) -> u64 {
+        let mut result = 1u64;
+        a = a % p;
+        while e > 0 {
+            if e & 1 == 1 {
+                result = Self::mul_mod_u64(result, a, p);
+            }
+            e >>= 1;
+            a = Self::mul_mod_u64(a, a, p);
+        }
+        result
+    }
+
+    /// Modular multiplication using u128
+    fn mul_mod_u64(a: u64, b: u64, q: u64) -> u64 {
+        ((a as u128 * b as u128) % q as u128) as u64
+    }
+
+    /// Modular inverse using extended Euclidean algorithm (u64 version)
+    fn mod_inverse_u64(a: u64, m: u64) -> Result<u64, String> {
+        let mut t: i128 = 0;
+        let mut newt: i128 = 1;
+        let mut r: i128 = m as i128;
+        let mut newr: i128 = a as i128;
+
+        while newr != 0 {
+            let quotient = r / newr;
+            let temp_t = t;
+            t = newt;
+            newt = temp_t - quotient * newt;
+
+            let temp_r = r;
+            r = newr;
+            newr = temp_r - quotient * newr;
+        }
+
+        if r > 1 {
+            return Err(format!("{} is not invertible mod {}", a, m));
+        }
+        if t < 0 {
+            t += m as i128;
+        }
+
+        Ok(t as u64)
     }
 
     /// Gadget decomposition: decompose polynomial into base-w digits using CRT
