@@ -2351,6 +2351,80 @@ impl CudaCkksContext {
         self.multiply_polys_ntt(a, b, num_primes)
     }
 
+    // ============================================================
+    // TEST WRAPPERS for debugging batched NTT operations
+    // These expose the internal batched operations for comparison testing
+    // ============================================================
+
+    /// Test wrapper: Apply negacyclic twist to flat layout data
+    pub fn apply_negacyclic_twist_flat(&self, data: &mut [u64], num_primes: usize) -> Result<(), String> {
+        let n = self.params.n;
+        let total_elements = n * num_primes;
+
+        if data.len() != total_elements {
+            return Err(format!("Expected {} elements, got {}", total_elements, data.len()));
+        }
+
+        // Upload to GPU
+        let mut gpu_data = self.device.device.htod_copy(data.to_vec())
+            .map_err(|e| format!("Failed to upload data: {:?}", e))?;
+
+        // Apply twist
+        self.apply_negacyclic_twist_gpu(&mut gpu_data, num_primes)?;
+
+        // Download result
+        let result = self.device.device.dtoh_sync_copy(&gpu_data)
+            .map_err(|e| format!("Failed to download data: {:?}", e))?;
+
+        data.copy_from_slice(&result);
+        Ok(())
+    }
+
+    /// Test wrapper: Apply negacyclic untwist to flat layout data
+    pub fn apply_negacyclic_untwist_flat(&self, data: &mut [u64], num_primes: usize) -> Result<(), String> {
+        let n = self.params.n;
+        let total_elements = n * num_primes;
+
+        if data.len() != total_elements {
+            return Err(format!("Expected {} elements, got {}", total_elements, data.len()));
+        }
+
+        // Upload to GPU
+        let mut gpu_data = self.device.device.htod_copy(data.to_vec())
+            .map_err(|e| format!("Failed to upload data: {:?}", e))?;
+
+        // Apply untwist
+        self.apply_negacyclic_untwist_gpu(&mut gpu_data, num_primes)?;
+
+        // Download result
+        let result = self.device.device.dtoh_sync_copy(&gpu_data)
+            .map_err(|e| format!("Failed to download data: {:?}", e))?;
+
+        data.copy_from_slice(&result);
+        Ok(())
+    }
+
+    /// Test wrapper: Batched forward NTT on flat layout data
+    pub fn ntt_forward_batched_flat(&self, data: &mut [u64], num_primes: usize) -> Result<(), String> {
+        self.ntt_forward_batched(data, num_primes)
+    }
+
+    /// Test wrapper: Batched inverse NTT on flat layout data
+    pub fn ntt_inverse_batched_flat(&self, data: &mut [u64], num_primes: usize) -> Result<(), String> {
+        self.ntt_inverse_batched(data, num_primes)
+    }
+
+    /// Test wrapper: Batched pointwise multiply on flat layout data
+    pub fn ntt_pointwise_multiply_batched_flat(
+        &self,
+        a: &[u64],
+        b: &[u64],
+        result: &mut [u64],
+        num_primes: usize,
+    ) -> Result<(), String> {
+        self.ntt_pointwise_multiply_batched(a, b, result, num_primes)
+    }
+
     /// NTT-based polynomial multiplication for negacyclic ring
     ///
     /// CRITICAL: Uses the SAME psi values stored in self.psi_per_prime that were

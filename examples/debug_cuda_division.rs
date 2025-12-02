@@ -218,6 +218,83 @@ fn main() -> Result<(), String> {
     }
 
     // ========================================
+    // TEST 0.65: Batched NTT Polynomial Multiplication
+    // ========================================
+    println!("════════════════════════════════════════════════════════════════════════");
+    println!("TEST 0.65: Batched NTT Polynomial Multiplication (negacyclic)");
+    println!("════════════════════════════════════════════════════════════════════════\n");
+
+    {
+        // Same test as 0.6 but using the batched GPU path
+        let n = params.n;
+        let num_primes = 3; // Use all 3 primes like the real multiplication
+
+        // Create polynomials in strided layout: a = 1 + x, b = 1 + x
+        let mut a_strided = vec![0u64; n * num_primes];
+        let mut b_strided = vec![0u64; n * num_primes];
+        for prime_idx in 0..num_primes {
+            a_strided[0 * num_primes + prime_idx] = 1;  // coeff 0
+            a_strided[1 * num_primes + prime_idx] = 1;  // coeff 1
+            b_strided[0 * num_primes + prime_idx] = 1;
+            b_strided[1 * num_primes + prime_idx] = 1;
+        }
+
+        // Test with single-prime path first (should work)
+        println!("  Testing single-prime path (test_multiply_polys_ntt)...");
+        let c_single = ctx.test_multiply_polys_ntt(&a_strided, &b_strided, num_primes)?;
+        println!("  Single-prime result: c[0]={}, c[1]={}, c[2]={}",
+            c_single[0], c_single[1 * num_primes], c_single[2 * num_primes]);
+
+        // Convert to flat layout for batched test
+        let a_flat = ctx.strided_to_flat(&a_strided, n, num_primes, num_primes);
+        let b_flat = ctx.strided_to_flat(&b_strided, n, num_primes, num_primes);
+
+        println!("  Testing batched GPU path...");
+
+        // Manually run the batched multiplication pipeline
+        let mut a_flat = a_flat;
+        let mut b_flat = b_flat;
+
+        // Apply twist
+        ctx.apply_negacyclic_twist_flat(&mut a_flat, num_primes)?;
+        ctx.apply_negacyclic_twist_flat(&mut b_flat, num_primes)?;
+
+        // Forward NTT
+        ctx.ntt_forward_batched_flat(&mut a_flat, num_primes)?;
+        ctx.ntt_forward_batched_flat(&mut b_flat, num_primes)?;
+
+        // Pointwise multiply
+        let mut c_flat = vec![0u64; n * num_primes];
+        ctx.ntt_pointwise_multiply_batched_flat(&a_flat, &b_flat, &mut c_flat, num_primes)?;
+
+        // Inverse NTT
+        ctx.ntt_inverse_batched_flat(&mut c_flat, num_primes)?;
+
+        // Apply untwist
+        ctx.apply_negacyclic_untwist_flat(&mut c_flat, num_primes)?;
+
+        // Convert back to strided
+        let c_batched = ctx.flat_to_strided(&c_flat, n, num_primes, num_primes);
+
+        println!("  Batched result: c[0]={}, c[1]={}, c[2]={}",
+            c_batched[0], c_batched[1 * num_primes], c_batched[2 * num_primes]);
+
+        // Compare results
+        let match_0 = c_single[0] == c_batched[0];
+        let match_1 = c_single[1 * num_primes] == c_batched[1 * num_primes];
+        let match_2 = c_single[2 * num_primes] == c_batched[2 * num_primes];
+
+        if match_0 && match_1 && match_2 {
+            println!("  ✓ PASS - Batched matches single-prime\n");
+        } else {
+            println!("  ✗ FAIL - Batched differs from single-prime!");
+            println!("  Single: [{}, {}, {}]", c_single[0], c_single[1 * num_primes], c_single[2 * num_primes]);
+            println!("  Batched: [{}, {}, {}]\n", c_batched[0], c_batched[1 * num_primes], c_batched[2 * num_primes]);
+            return Err("Batched NTT multiplication test failed".to_string());
+        }
+    }
+
+    // ========================================
     // TEST 0.7: Trivial Encryption (c0=m, c1=0)
     // ========================================
     println!("════════════════════════════════════════════════════════════════════════");
