@@ -330,6 +330,16 @@ impl CudaCkksContext {
         &self.rescale_inv_table
     }
 
+    /// Get reference to psi values per prime (for negacyclic twist)
+    pub fn psi_per_prime(&self) -> &[u64] {
+        &self.psi_per_prime
+    }
+
+    /// Get reference to psi inverse values per prime (for negacyclic untwist)
+    pub fn psi_inv_per_prime(&self) -> &[u64] {
+        &self.psi_inv_per_prime
+    }
+
     /// Modular multiplication: (a * b) mod q
     /// Uses u128 to avoid overflow
     fn mul_mod(a: u64, b: u64, q: u64) -> u64 {

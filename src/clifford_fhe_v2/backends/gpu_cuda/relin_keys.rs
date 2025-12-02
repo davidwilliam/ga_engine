@@ -718,24 +718,20 @@ impl CudaRelinKeys {
         for prime_idx in 0..num_primes {
             let ntt_ctx = &ntt_contexts[prime_idx];
             let q = self.params.moduli[prime_idx];
-            let omega = ntt_ctx.root;  // omega is the primitive N-th root
             let offset = prime_idx * n;
 
-            // Find psi (primitive 2N-th root) such that psi² = omega
-            // We use Tonelli-Shanks to find sqrt(omega) mod q
-            let psi_candidate = Self::find_sqrt_mod(omega, q)?;
-
-            // CRITICAL FIX: Tonelli-Shanks returns one of two square roots.
-            // We need the one that satisfies psi^N = -1 (mod q) for proper negacyclic.
-            // If psi^N != q-1, use the other root: q - psi
-            let psi_n = Self::pow_mod(psi_candidate, n as u64, q);
-            let psi = if psi_n == q - 1 {
-                psi_candidate
-            } else {
-                // The other root is q - psi_candidate
-                q - psi_candidate
-            };
+            // Find psi (primitive 2N-th root) using same algorithm as CudaCkksContext
+            // CRITICAL: Must use find_primitive_root, NOT Tonelli-Shanks sqrt(omega)!
+            // Different algorithms can produce different (but mathematically equivalent) roots.
+            let psi = Self::find_primitive_root(n, q)?;
             let psi_inv = Self::mod_inverse_u64(psi, q)?;
+
+            // Debug: print psi values
+            if std::env::var("PSI_DEBUG").is_ok() && prime_idx < 3 {
+                let omega = ntt_ctx.root;
+                println!("[PSI_DEBUG EVK_GEN] Prime {}: psi={}, omega={} (via find_primitive_root)",
+                         prime_idx, psi, omega);
+            }
 
             // Extract polynomials for this prime
             let mut p1 = poly1[offset..offset + n].to_vec();
@@ -837,6 +833,46 @@ impl CudaRelinKeys {
             a = Self::mul_mod_u64(a, a, p);
         }
         result
+    }
+
+    /// Find primitive 2N-th root of unity modulo q
+    ///
+    /// CRITICAL: This must match CudaCkksContext::find_primitive_root exactly!
+    /// Uses the same algorithm to ensure EVK generation and relinearization
+    /// use identical psi values.
+    fn find_primitive_root(n: usize, q: u64) -> Result<u64, String> {
+        let two_n = (2 * n) as u64;
+        if (q - 1) % two_n != 0 {
+            return Err(format!("q-1 = {} is not divisible by 2N = {}", q - 1, two_n));
+        }
+
+        // MUST match CudaCkksContext's candidate list exactly
+        let candidates: [u64; 11] = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31];
+
+        for &candidate in &candidates {
+            // Check if candidate is a quadratic non-residue
+            if Self::pow_mod(candidate, (q - 1) / 2, q) == 1 {
+                continue;
+            }
+
+            // Compute psi = g^((q-1)/2N) mod q
+            let exp = (q - 1) / two_n;
+            let psi = Self::pow_mod(candidate, exp, q);
+
+            // Verify: psi^N = -1 (mod q)
+            let psi_n = Self::pow_mod(psi, n as u64, q);
+            if psi_n != q - 1 {
+                continue;
+            }
+
+            // Verify: psi^(2N) = 1 (mod q)
+            let psi_2n = Self::pow_mod(psi, two_n, q);
+            if psi_2n == 1 {
+                return Ok(psi);
+            }
+        }
+
+        Err(format!("Could not find primitive root for n={}, q={}", n, q))
     }
 
     /// Modular multiplication using u128
