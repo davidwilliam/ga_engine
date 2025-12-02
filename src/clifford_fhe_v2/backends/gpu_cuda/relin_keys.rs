@@ -275,6 +275,28 @@ impl CudaRelinKeys {
             // When we multiply digit d_t by b_i, we get: d_t·(a_i·s + e - B^t·s²)
             // The d_t·B^t·s² term cancels out c2·s² when summed over all digits
 
+            // Debug: print first component values
+            if std::env::var("EVK_GEN_DEBUG").is_ok() && digit_idx == 0 {
+                println!("[EVK_GEN_DEBUG CUDA] EVK[0] b_i first 3 coeffs (flat):");
+                for coeff in 0..3.min(n) {
+                    print!("  coeff[{}]: ", coeff);
+                    for p in 0..num_primes_key {
+                        let idx = p * n + coeff;
+                        print!("{} ", b_i[idx]);
+                    }
+                    println!();
+                }
+                println!("[EVK_GEN_DEBUG CUDA] EVK[0] a_i first 3 coeffs (flat):");
+                for coeff in 0..3.min(n) {
+                    print!("  coeff[{}]: ", coeff);
+                    for p in 0..num_primes_key {
+                        let idx = p * n + coeff;
+                        print!("{} ", a_i[idx]);
+                    }
+                    println!();
+                }
+            }
+
             ks_components.push((b_i, a_i));
 
             if (digit_idx + 1) % 5 == 0 || digit_idx == self.dnum - 1 {
@@ -469,6 +491,44 @@ impl CudaRelinKeys {
         // Decompose c2 into base-w digits
         let digits = self.gadget_decompose(c2, num_primes)?;
 
+        // Debug: print number of digits and their content
+        if std::env::var("RELIN_DEBUG").is_ok() {
+            println!("[RELIN_DEBUG CUDA] num_primes={}, num_digits={}", num_primes, digits.len());
+
+            // Check if digits are mostly zero
+            let mut non_zero_count = 0;
+            for (t, digit) in digits.iter().enumerate() {
+                let nz: usize = digit.iter().filter(|&&x| x != 0).count();
+                non_zero_count += nz;
+                if t < 3 {
+                    println!("[RELIN_DEBUG CUDA] digit[{}] has {} non-zero values out of {}",
+                             t, nz, digit.len());
+                }
+            }
+            println!("[RELIN_DEBUG CUDA] Total non-zero values across all digits: {}", non_zero_count);
+
+            if !digits.is_empty() {
+                println!("[RELIN_DEBUG CUDA] digit[0] first 3 coeffs (flat):");
+                for coeff in 0..3.min(n) {
+                    print!("  coeff[{}]: ", coeff);
+                    for p in 0..num_primes {
+                        print!("{} ", digits[0][p * n + coeff]);
+                    }
+                    println!();
+                }
+            }
+
+            // Print c2 first 3 coeffs for comparison
+            println!("[RELIN_DEBUG CUDA] c2 first 3 coeffs (flat) for comparison:");
+            for coeff in 0..3.min(n) {
+                print!("  coeff[{}]: ", coeff);
+                for p in 0..num_primes {
+                    print!("{} ", c2[p * n + coeff]);
+                }
+                println!();
+            }
+        }
+
         // Initialize accumulator
         let mut c0_acc = c0.to_vec();
         let mut c1_acc = c1.to_vec();
@@ -485,15 +545,92 @@ impl CudaRelinKeys {
 
             let (b_i, a_i) = &relin_key.ks_components[digit_idx];
 
+            // Debug: print input sizes and first few values
+            if std::env::var("RELIN_DEBUG").is_ok() && digit_idx == 0 {
+                println!("[RELIN_DEBUG CUDA] digit[0].len()={}, b_i.len()={}, a_i.len()={}",
+                         d_i.len(), b_i.len(), a_i.len());
+                println!("[RELIN_DEBUG CUDA] Expected size: n * num_primes = {} * {} = {}",
+                         n, num_primes, n * num_primes);
+
+                // Print first 3 coefficients of digit[0] in flat layout
+                println!("[RELIN_DEBUG CUDA] d_i[0] first 3 coeffs (flat):");
+                for coeff in 0..3.min(n) {
+                    print!("  coeff[{}]: ", coeff);
+                    for p in 0..num_primes {
+                        let idx = p * n + coeff;
+                        if idx < d_i.len() {
+                            print!("{} ", d_i[idx]);
+                        }
+                    }
+                    println!();
+                }
+
+                // Print first 3 coefficients of b_i (EVK)
+                println!("[RELIN_DEBUG CUDA] b_i first 3 coeffs (flat):");
+                for coeff in 0..3.min(n) {
+                    print!("  coeff[{}]: ", coeff);
+                    for p in 0..num_primes {
+                        let idx = p * n + coeff;
+                        if idx < b_i.len() {
+                            print!("{} ", b_i[idx]);
+                        }
+                    }
+                    println!();
+                }
+            }
+
             // Multiply d_i · b_i using GPU NTT (BATCHED version)
             let d_b = self.gpu_multiply_flat_ntt_batched(d_i, b_i, num_primes, ckks_ctx)?;
             // Multiply d_i · a_i using GPU NTT (BATCHED version)
             let d_a = self.gpu_multiply_flat_ntt_batched(d_i, a_i, num_primes, ckks_ctx)?;
 
+            // Debug: print result of multiplication
+            if std::env::var("RELIN_DEBUG").is_ok() && digit_idx == 0 {
+                println!("[RELIN_DEBUG CUDA] d_b = d_i * b_i result first 3 coeffs (flat):");
+                for coeff in 0..3.min(n) {
+                    print!("  coeff[{}]: ", coeff);
+                    for p in 0..num_primes {
+                        let idx = p * n + coeff;
+                        if idx < d_b.len() {
+                            print!("{} ", d_b[idx]);
+                        }
+                    }
+                    println!();
+                }
+
+                // Print c0_acc before subtraction
+                println!("[RELIN_DEBUG CUDA] c0_acc BEFORE subtract first 3 coeffs:");
+                for coeff in 0..3.min(n) {
+                    print!("  coeff[{}]: ", coeff);
+                    for p in 0..num_primes {
+                        let idx = p * n + coeff;
+                        if idx < c0_acc.len() {
+                            print!("{} ", c0_acc[idx]);
+                        }
+                    }
+                    println!();
+                }
+            }
+
             // c0 -= d·b (SUBTRACTION, not addition!)
             c0_acc = ckks_ctx.subtract_polynomials_gpu(&c0_acc, &d_b, num_primes)?;
             // c1 += d·a (addition)
             c1_acc = ckks_ctx.add_polynomials_gpu(&c1_acc, &d_a, num_primes)?;
+
+            // Debug: print c0_acc after first digit
+            if std::env::var("RELIN_DEBUG").is_ok() && digit_idx == 0 {
+                println!("[RELIN_DEBUG CUDA] c0_acc AFTER subtract first 3 coeffs:");
+                for coeff in 0..3.min(n) {
+                    print!("  coeff[{}]: ", coeff);
+                    for p in 0..num_primes {
+                        let idx = p * n + coeff;
+                        if idx < c0_acc.len() {
+                            print!("{} ", c0_acc[idx]);
+                        }
+                    }
+                    println!();
+                }
+            }
         }
 
         Ok((c0_acc, c1_acc))
