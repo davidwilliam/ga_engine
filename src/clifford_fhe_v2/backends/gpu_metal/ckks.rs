@@ -157,6 +157,11 @@ impl MetalCkksContext {
         &self.ntt_contexts
     }
 
+    /// Get psi (primitive 2N-th root) for each prime
+    pub fn psi_per_prime(&self) -> Vec<u64> {
+        self.ntt_contexts.iter().map(|ctx| ctx.psi()).collect()
+    }
+
     /// Encode floating-point values into plaintext polynomial
     ///
     /// Currently uses CPU for canonical embedding (GPU optimization planned).

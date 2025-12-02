@@ -579,10 +579,11 @@ impl CudaRelinKeys {
                 }
             }
 
-            // Multiply d_i · b_i using GPU NTT (BATCHED version)
-            let d_b = self.gpu_multiply_flat_ntt_batched(d_i, b_i, num_primes, ckks_ctx)?;
-            // Multiply d_i · a_i using GPU NTT (BATCHED version)
-            let d_a = self.gpu_multiply_flat_ntt_batched(d_i, a_i, num_primes, ckks_ctx)?;
+            // Multiply d_i · b_i using GPU NTT (SEQUENTIAL version - same as EVK generation)
+            // CRITICAL: Use the same multiplication method as EVK generation to ensure consistency!
+            let d_b = self.gpu_multiply_flat_ntt(d_i, b_i, num_primes, ntt_contexts)?;
+            // Multiply d_i · a_i using GPU NTT (SEQUENTIAL version - same as EVK generation)
+            let d_a = self.gpu_multiply_flat_ntt(d_i, a_i, num_primes, ntt_contexts)?;
 
             // Debug: print result of multiplication
             if std::env::var("RELIN_DEBUG").is_ok() && digit_idx == 0 {

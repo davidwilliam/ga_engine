@@ -460,6 +460,11 @@ impl MetalNttContext {
         Self::mont_mul_cpu(x_mont, 1, q, q_inv)
     }
 
+    /// Access the primitive 2N-th root of unity (psi)
+    pub fn psi(&self) -> u64 {
+        self.psi
+    }
+
     /// Access psi powers (for twist/untwist in CKKS polynomial multiplication)
     pub fn psi_powers(&self) -> &[u64] {
         &self.psi_powers
