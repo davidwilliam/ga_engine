@@ -581,8 +581,19 @@ impl CudaRelinKeys {
             let offset = prime_idx * n;
 
             // Find psi (primitive 2N-th root) such that psi² = omega
-            // We use Tonelli-Shanks or trial method to find sqrt(omega) mod q
-            let psi = Self::find_sqrt_mod(omega, q)?;
+            // We use Tonelli-Shanks to find sqrt(omega) mod q
+            let psi_candidate = Self::find_sqrt_mod(omega, q)?;
+
+            // CRITICAL FIX: Tonelli-Shanks returns one of two square roots.
+            // We need the one that satisfies psi^N = -1 (mod q) for proper negacyclic.
+            // If psi^N != q-1, use the other root: q - psi
+            let psi_n = Self::pow_mod(psi_candidate, n as u64, q);
+            let psi = if psi_n == q - 1 {
+                psi_candidate
+            } else {
+                // The other root is q - psi_candidate
+                q - psi_candidate
+            };
             let psi_inv = Self::mod_inverse_u64(psi, q)?;
 
             // Extract polynomials for this prime
